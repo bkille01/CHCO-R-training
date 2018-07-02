@@ -1,3 +1,5 @@
-# CHCO-R-training
+## Purpose
+This repository provides documentation for the 2018 CHCO Reserach Informatics R Training. The code in this repository has been written to facilitate this training.
 
-This repository will be used for the July 2018 CHCO R Training. Stay posted for updates.
+### Documentation
+For detailed documentation, please see the [wiki](https://github.com/accomer/CHCO-R-training/wiki). The Wiki includes a detailed description of the material that is covered during the training as well as links to additional R resources. 
