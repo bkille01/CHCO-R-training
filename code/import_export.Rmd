@@ -1,0 +1,469 @@
+---
+title: "CHCO R Training"
+subtitle: "Hands-on Experience Importing and Exporting Data"
+author: "Tiffany J. Callahan"
+output: html_notebook
+---
+
+# Purpose
+This [R Markdown Notebook](http://rmarkdown.rstudio.com) is intended to be used for practicing importing and exporting different kinds of data. This Notebook contains code for importing the following types of data:  
+    * [Flat Files](#txt)  
+    * [Excel Files](#excel)  
+    * [SAS and SPSS Data Files](#sas-and-spss)  
+    * [XML Data Files](#xml)  
+    * [JSON Data Files](#json)  
+    * [HTML Data Files](#html)  
+    * [R Data Files](#Rdata) 
+
+Before starting, there are some [tips and tricks](https://www.datacamp.com/community/tutorials/r-data-import-tutorial) that you should know. In general, when building a data set we should always avoid creating column names with spaces as this will cause errors when importing the data. Instead of adding spaces, use `_` or `.` (Try to avoid using names that contain symbols such as `?`, `$`, `%`, `^`, `&`, `*`, `(`, `)`, `-`, `#`, `?`, `,`, `<`, `>`, `/`, `|`, `\`, `[`, `]`, `{`, and `}`) if you want to have a column name that is more than a single word. Although not mandatory, it is often easier to convert missing values to `NA` prior to importing data.  
+
+When working in RStudio you may want to remove objects (i.e. files or variables) from your working directory. To do this, you can pass the object to the `rm()` function.  
+
+## Set-up Environment  
+**Create Data**
+Prior to beginning the tutorial we need to create some data that we can use to practice importing. To do this, we will download data directly from a bunch of free sources on the web.
+
+```{r}
+# create a new directory in current working directory to write data to
+dir.create("data")
+
+download.file(url="https://ucr.fbi.gov/crime-in-the-u.s/2013/crime-in-the-u.s.-2013/tables/1tabledatadecoverviewpdf/table_1_crime_in_the_united_states_by_volume_and_rate_per_100000_inhabitants_1994-2013.xls/output.xls",
+              destfile="data/US_crime.xls", mode = 'wb')
+
+# download datat camp text file
+download.file(url="https://s3.amazonaws.com/assets.datacamp.com/blog_assets/test.txt",destfile="data/data_camp.txt", mode = 'wb')
+
+# download hospital recorded adverse events from California (.csv)
+download.file(url="https://data.chhs.ca.gov/dataset/9638e316-763e-4f69-b827-e9aba51c1f33/resource/d08f328e-0cd9-4df4-92f2-99ae5261b50a/download/ca-oshpd-adveventhospitalizationspsi-county2005-2015q3.csv", destfile="data/ca-oshpd-adveventhospitalizationspsi-county2005-2015q3.csv",
+              mode = 'wb')
+
+# download data from R (.rds) - uncomment "data(AirPassengers)" to download data and re-comment before running Notebook (Ctrl+shift+c)
+# data(AirPassengers)
+saveRDS(AirPassengers, "data/AirPassengers.rds")
+
+# download commute data (.sas7bdat)
+download.file(url="http://www.principlesofeconometrics.com/sas/commute.sas7bdat",
+              destfile="data/commute.sas7bdat", mode = 'wb')
+
+# download depression data (.SPSS)
+download.file(url="http://spss.allenandunwin.com.s3-website-ap-southeast-2.amazonaws.com/Files/depress.zip", destfile="data/despression.zip",
+              mode = 'wb')
+unzip("data/despression.zip",exdir="data")
+file.remove("data/despression.zip")
+
+# download data from data.gov on consumer complaints (.json)
+download.file(url="http://data.consumerfinance.gov/api/views.json",
+              destfile="data/consumer_complaint.json",
+              mode = 'wb')
+
+# download data from GGobi on olives (.xml)
+download.file(url="http://www.ggobi.org/book/data/olive.xml",
+              destfile="data/olive.xml",
+              mode = 'wb')
+```
+  
+**Install Packages**  
+Lucky for us, most of the libraries that we need for reading in data are available as part of the  [`tidyverse`](https://www.tidyverse.org/). The `tidyverse` are a set of R packages that have been specifically designed for data science. Please see this [website](https://www.tidyverse.org/packages/) for a list of packages that are available. 
+```{r}
+# check if you already installed the package
+if(!any(grepl("tidyverse", installed.packages()))){
+  install.packages("tidyverse")
+  library(tidyverse)
+} else {
+  library(tidyverse)
+}
+```
+  
+**Tips and Tricks**  
+You can check what kind of object something is by using the `class()` function. To get additional information on an object use the `str()` function. The `head()` function can be used to view the first 5 rows of a  `vector`, `matrix`, `table`, `data.frame` or `function`. Finally, the `class()` function is used to return the column names of a data frame. I have provided examples using these functions below.  
+
+
+<a name="txt"/>  
+
+## Flat Files  
+### Importing Data  
+When reading in flat files like tab- or comma-delimited file (`.txt` or `.csv`) files, we can use several different functions, as written on the [readr](https://readr.tidyverse.org/) website:  
+  * **read_csv():** comma separated (CSV) files  
+  * **read_tsv():** tab separated files  
+  * **read_delim():** general delimited files  
+  * **read_fwf():** fixed width files  
+  * **read_table():** tabular files where columns are separated by white-space  
+  * **read_log():** web log files  
+  
+For each of these functions, the imported data will be returned as a [`tibble`](https://cran.r-project.org/web/packages/tibble/vignettes/tibble.html), which is essentially the same thing as an R `data.frame`.
+
+Prior to using the `readr::read_table()` function, you might want to investigate the parameters that it takes. To do this, type `?readr::read_table()` into the console. You should see a bunch of helpful information in the **Viewer Console**. The following arguments can be passed to this function:  
+
+Argument |                     Definition                      |
+--------- | -------------------------------------------------- |
+`file` | Either a path to a file, a connection, or literal data (either a single string or a raw vector). |
+`col_names` | Either `TRUE`, `FALSE` or a *character vector* of column names. If `TRUE`, the first row of the input will be used as the column names, and will not be included in the data frame. If `FALSE`, column names will be generated automatically: `X1`, `X2`, `X3` etc. If `col_names` is a *character vector*, the values will be used as the names of the columns, and the first row of the input will be read into the first row of the output data frame. Missing (`NA`) column names will generate a warning, and be filled in with dummy names `X1`, `X2` etc. Duplicate column names will generate a warning and be made unique with a numeric prefix. |
+`col_types` | One of `NULL`, a `cols()` specification, or a *string*. See `vignette("column-types")` for more details. If `NULL`, all column types will be imputed from the first 1000 rows on the input. This is convenient (and fast), but not robust. If the imputation fails, you'll need to supply the correct types yourself. If a column specification created by `cols()`, it must contain one column specification for each column. If you only want to read a subset of the columns, use `cols_only()`. Alternatively, you can use a compact string representation where each character represents one column: `c = character`, `i = integer`, `n = number`, `d = double`, `l = logical`, `D = date`, `T = date time`, `t = time`, `? = guess`, or `_/-` to skip the column. |
+`locale` | The `locale` controls defaults that vary from place to place. The default locale is US-centric (like R), but you can use `locale()` to create your own locale that controls things like the default time zone, encoding, decimal mark, big mark, and day/month names. |
+`na` | *Character vector* of strings to use for missing values. Set this option to `character()` to indicate no missing values. |
+`skip` | Number of lines to skip before reading data. |
+`n_max` | Maximum number of records to read. |
+`guess_max` | Maximum number of records to use for guessing column types. |
+`progress` | Display a progress bar? By default it will only display in an interactive session and not while knitting a document. The display is updated every 50,000 values and will only display if estimated reading time is 5 seconds or more. The automatic progress bar can be disabled by setting option `readr.show_progress` to `FALSE`. |
+`comment` | A string used to identify comments. Any text after the comment characters will be silently ignored. |  
+
+Below, I have provided two examples. The first example demonstrates how to read in a text or tab-delimited file that we downloaded from [DataCamp](https://www.datacamp.com/community/tutorials/r-data-import-tutorial). 
+```{r}
+## Example 1: read in text file from DataCamp
+dc_txt <- readr::read_table("data/data_camp.txt", col_names = FALSE)
+dc_txt
+```
+
+```{r}
+# what type of object is the read in data stored as
+class(dc_txt)
+```
+
+```{r}
+# view the structure of the read in data object
+str(dc_txt)
+```
+  
+```{r}
+# view the first few rows of the read in data
+head(dc_txt)
+```
+
+The second example demonstrates how to read in a comma-delimited filed we downloaded from the state of California on [adverse event hospitalizations](https://data.chhs.ca.gov/dataset/9638e316-763e-4f69-b827-e9aba51c1f33/resource/d08f328e-0cd9-4df4-92f2-99ae5261b50a/download/ca-oshpd-adveventhospitalizationspsi-county2005-2015q3.csv).   
+```{r}
+## Example 2: read in a csv file from the state of California
+ca_hosp_csv <- readr::read_csv("data/ca-oshpd-adveventhospitalizationspsi-county2005-2015q3.csv")
+
+# view the structure of the read in data object
+str(ca_hosp_csv)
+```
+
+Although we will not be going through an example, the `readr::read_delim()` function can also be used to import tab- and comma-delimited data. This function can be particularly useful when reading in data that uses a delimiter other than a `,` or `\t`.  
+
+### Exporting Data  
+To export a flat file, we can use the `read.table()` function. To investigate the parameters this function takes, type `?read.table()` into the console. You should see a bunch of helpful information in the **Viewer Console**. The following arguments can be passed to this function:  
+
+Argument |                     Definition                      |
+--------- | -------------------------------------------------- |
+`x` | the object to be written, preferably a *matrix* or *data frame*. If not, it is attempted to coerce `x` to a data frame. |
+`file` | either a *character string* naming a file or a connection open for writing. `""` indicates output to the console. |
+`append` | *logical*. Only relevant if file is a character string. If `TRUE`, the output is appended to the file. If `FALSE`, any existing file of the name is destroyed. |
+`quote` | a *logical value* (`TRUE` or `FALSE`) or a *numeric vector*. If `TRUE`, any character or factor columns will be surrounded by double quotes. If a *numeric vector*, its elements are taken as the indices of columns to quote. In both cases, row and column names are quoted if they are written. If `FALSE`, nothing is quoted. |
+`sep`	| the field separator string. Values within each row of `x` are separated by this string. |
+`eol` | the *character(s)* to print at the end of each line (row). For example, `eol = "\r\n"` will produce Windows' line endings on a Unix-alike OS, and `eol = "\r"` will produce files as expected by Excel:mac 2004. |
+`na` | the string to use for missing values in the data. |
+`dec` | the *string* to use for decimal points in numeric or complex columns: must be a single character. |
+`row.names` | either a *logical value* indicating whether the row names of `x` are to be written along with `x`, or a *character vector* of row names to be written. |
+`col.names`	| either a *logical value* indicating whether the column names of `x` are to be written along with `x`, or a *character vector* of column names to be written. See the section on ‘CSV files’ for the meaning of `col.names = NA`. |
+`qmethod` | a *character string* specifying how to deal with embedded double quote characters when quoting strings. Must be one of "escape" (default for `write.table`), in which case the quote character is escaped in C style by a backslash, or "double" (default for `write.csv` and `write.csv2`), in which case it is doubled. You can specify just the initial letter. |
+`fileEncoding` | *character string*: if non-empty declares the encoding to be used on a file (not a connection) so the character data can be re-encoded as they are written. See `file`. |  
+
+We will now write the first flat text file we read in to disc using the following code.  
+```{r}
+# write data from example 1 to disc
+write.table(dc_txt,
+            "data/data_camp_out.txt",
+            quote=FALSE,
+            row.names = FALSE)
+
+# write data from example 2 to disc
+write.csv(ca_hosp_csv,
+          "data/ca-oshpd-adveventhospitalizationspsi-county2005-2015q3_out.csv",
+          quote=FALSE,
+          row.names = FALSE)
+```
+
+
+<a name="excel"/>  
+
+## Excel Files  
+### Importing Data  
+When importing Excel files that are not comma-delimited (i.e. .xlsx or .xls), we can use the [`readxl`](https://readxl.tidyverse.org/) package. The parameters that can be passed when reading in data using `readxl::read_excel()` include:  
+
+Argument |                     Definition                      |
+-------- | --------------------------------------------------- |
+`path` | Path to the xls/xlsx file. |
+`sheet` |	Sheet to read. Either a *string* (the name of a sheet), or an *integer* (the position of the sheet). Ignored if the sheet is specified via `range`. If neither argument specifies the sheet, defaults to the first sheet. |
+`range` |	A *cell range* to read from, as described in cell-specification. Includes typical Excel ranges like "B3:D87", possibly including the sheet name like "Budget!B2:G14", and more. Interpreted strictly, even if the range forces the inclusion of leading or trailing empty rows or columns. Takes precedence over `skip`, `n_max` and `sheet`. |
+`col_names`	| `TRUE` to use the first row as column names, `FALSE` to get default names, or a *character vector* giving a name for each column. If user provides `col_types` as a vector, `col_names` can have one entry per column, i.e. have the same length as `col_types`, or one entry per unskipped column. |
+`col_types`	| Either `NULL` to guess all from the spreadsheet or a *character vector* containing one entry per column from these options: "skip", "guess", "logical", "numeric", "date", "text" or "list". If exactly one `col_type` is specified, it will be recycled. The content of a cell in a skipped column is never read and that column will not appear in the data frame output. A list cell loads a column as a list of length 1 vectors, which are typed using the type guessing logic from `col_types = NULL`, but on a cell-by-cell basis. |
+`na` | *Character vector* of strings to interpret as missing values. By default, `readxl` treats blank cells as missing data. |
+`trim_ws` |	Should leading and trailing whitespace be trimmed? |
+`skip` | Minimum number of rows to skip before reading anything, be it column names or data. Leading empty rows are automatically skipped, so this is a lower bound. Ignored if `range` is given. |
+`n_max` |	Maximum number of data rows to read. Trailing empty rows are automatically skipped, so this is an upper bound on the number of rows in the returned tibble. Ignored if range is given. |
+`guess_max` |	Maximum number of data rows to use for guessing column types. | 
+
+Using the function described above, we will read in crime data from the FBI. Notice how we use the `skip` argument below to ensure that the correct column names are used (i.e. that we ignored the note that is included at the beginning of the file).
+```{r}
+# example 3: read in a xls file of FBI crime data
+fbi_crime_xls <- readxl::read_excel("data/US_crime.xls", sheet = 1, col_names = TRUE, skip = 3)
+
+# view the structure of the read in data object
+str(fbi_crime_xls)
+```
+  
+### Exporting Data    
+To export a flat file, we can use the `openxlsx::write.xlsx()` function. To investigate the parameters this function takes, type `?openxlsx::write.xlsx()` into the console. You should see a bunch of helpful information in the **Viewer Console**. The following arguments can be passed to this function:  
+
+Argument |                     Definition                      |
+--------- | -------------------------------------------------- |
+`x` |	object or a list of objects that can be handled by `writeData` to write to file. |
+`file` |	xlsx file name. | 
+`asTable` |	write using writeDataTable as opposed to `writeData`. | 
+`startCol` | A *vector* specifying the starting column(s) to write df. |
+`startRow` | A *vector* specifying the starting row(s) to write df. |
+`xy` | An alternative to specifying `startCol` and `startRow` individually. A vector of the form `c(startCol, startRow)`. |
+`colNames` | If `TRUE`, column names of `x` are written. |
+`rowNames` | If `TRUE`, row names of `x` are written. |
+`headerStyle` | Custom style to apply to column names. |
+`borders` | Either "surrounding", "columns" or "rows" or `NULL`. If "surrounding", a border is drawn around the data. If "rows", a surrounding border is drawn a border around each row. If "columns", a surrounding border is drawn with a border between each column. If "all" all cell borders are drawn. |
+`borderColour` | Colour of cell border. |
+`borderStyle` | Border line style. |
+`keepNA` | If `TRUE`, `NA` values are converted to #N/A in Excel else `NA` cells will be empty. Defaults to `FALSE`. |
+
+We will now write the Excel file we read in to disc using the following code.  
+```{r}
+# install and load needed package
+if(!any(grepl("openxlsx", installed.packages()))){
+  install.packages("openxlsx")
+  library(openxlsx)
+} else {
+  library(openxlsx)
+}
+
+# write data from example 3 to disc
+openxlsx::write.xlsx(fbi_crime_xls,
+                     "data/US_crime_out.xls",
+                     rowNames = FALSE)
+```
+
+
+<a name="sas-and-spss"/>  
+
+## SAS and SPSS Data Files  
+When importing a SAS or SPSS file, we can use the [`haven`](https://haven.tidyverse.org/) package.  
+**SAS Data Files**  
+**Importing Data**  
+The parameters that can be passed when reading in data using `haven::read_sas()` include:  
+
+Argument |                     Definition                      |
+-------- | --------------------------------------------------- |
+`data_file`, `catalog_file` | Path to data and catalog files. The files are processed with `readr::datasource()`. |
+`encoding`, `catalog_encoding` | The character encoding used for the `data_file` and `catalog_encoding` respectively. A value of `NULL` uses the encoding specified in the file; use this argument to override it if it is incorrect. |
+`cols_only` |	A *character vector* giving an experimental way to read in only specified columns. |
+`data` | Data frame to write. |
+`path` | Path to file where the data will be written. |
+
+Using the function described above, we will read in commuting data. Notice that when using `str()` to view the data you get the same information as was provided when reading in flat files and Excel Files. In addition to that information, you also get labels for each of the variables.
+```{r}
+# example 4: read in a SAS file of commuting data
+comm_sas <- haven::read_sas("data/commute.sas7bdat")
+
+# view the structure of the read in data object
+str(comm_sas)
+```
+  
+**Exporting Data**  
+To export a SAS file, we can use the `haven::write_sas()` function. To investigate the parameters this function takes, type `?haven::write_sas()` into the console. You should see a bunch of helpful information in the **Viewer Console**. The following arguments can be passed to this function:  
+
+Argument |                     Definition                      |
+--------- | -------------------------------------------------- |
+`data_file`, `catalog_file` | Path to data and catalog files. The files are processed with `readr::datasource()`. |
+`encoding`, `catalog_encoding` | 	The character encoding used for the `data_file` and `catalog_encoding` respectively. A value of `NULL` uses the encoding specified in the file; use this argument to override it if it is incorrect. |
+`cols_only`	| A *character vector* giving an experimental way to read in only specified columns. |
+`data` | *Data frame* to write. |
+`path` | Path to file where the data will be written. | 
+
+We will now write the SAS file we read in to disc using the following code.  
+```{r}
+# write data from example 4 to disc
+haven::write_sas(comm_sas, "data/commute_out.sas7bdat")
+```
+
+  
+**SPSS Data Files**  
+**Importing Data**  
+The parameters that can be passed when reading in data using `haven::read_spss()` include:  
+
+Argument |                     Definition                      |
+-------- | --------------------------------------------------- |
+`file` | Either a path to a file, a connection, or literal data (either a single string or a raw vector). Files ending in `.gz`, `.bz2`, `.xz`, or `.zip` will be automatically uncompressed. Files starting with `http://`, `https://`, `ftp://`, or `ftps://` will be automatically downloaded. Remote `gz` files can also be automatically downloaded and decompressed. Literal data is most useful for examples and tests. It must contain at least one new line to be recognised as data (instead of a path). |
+`encoding` | The *character encoding* used for the file. The default, `NULL`, use the encoding specified in the file, but sometimes this value is incorrect and it is useful to be able to override it. |
+`user_na` |	If `TRUE` variables with user defined missing will be read into `labelled_spss()` objects. If `FALSE`, the default, user-defined missings will be converted to `NA`. |
+`data` | Data frame to write. |
+`path` | Path to a file where the data will be written. |
+`compress` | If `TRUE`, will compress the file, resulting in a `.zsav` file. |
+
+Using the function described above, we will read in commuting data. Notice that when using `str()` to view the data you get the same information as was provided when reading in flat files and Excel Files. In addition to that information, you also get labels for each of the variables.
+```{r}
+# example 5: read in a SAS file of commuting data
+depress_sav <- haven::read_sav("data/depress.sav")
+
+# view the structure of the read in data object
+str(depress_sav)
+```
+  
+**Exporting Data**  
+To export a SPSS file, we can use the `haven::write_sav()` function. To investigate the parameters this function takes, type `?haven::write_sav()` into the console. You should see a bunch of helpful information in the **Viewer Console**. The following arguments can be passed to this function:  
+
+Argument |                     Definition                      |
+--------- | -------------------------------------------------- |
+`file` | Either a path to a file, a connection, or literal data (either a single string or a raw vector). Files ending in `.gz`, `.bz2`, `.xz`, or `.zip` will be automatically uncompressed. Files starting with `http://`, `https://`, `ftp://`, or `ftps://` will be automatically downloaded. Remote `gz` files can also be automatically downloaded and decompressed. Literal data is most useful for examples and tests. It must contain at least one new line to be recognised as data (instead of a path). |
+`encoding` | The *character encoding* used for the file. The default, `NULL`, use the encoding specified in the file, but sometimes this value is incorrect and it is useful to be able to override it. |
+`user_na` |	If `TRUE` variables with user defined missing will be read into `labelled_spss()` objects. If `FALSE`, the default, user-defined missings will be converted to `NA`. |
+`data` | *Data frame* to write. |
+`path` | Path to a file where the data will be written. |
+`compress` | If `TRUE`, will compress the file, resulting in a `.zsav` file. | 
+
+We will now write the SAS file we read in to disc using the following code.  
+```{r}
+# write data from example 5 to disc
+haven::write_sav(depress_sav, "data/depress_out.sav")
+```
+ 
+
+  
+<a name="xml"/>  
+
+## XML Data Files  
+### Importing Data  
+When importing JSON files we can use the [`xml2`](https://github.com/r-lib/xml2) package. The parameters that can be passed when reading in data using `xml2::read_xml()` include:  
+
+Argument |                     Definition                      |
+-------- | --------------------------------------------------- |
+`x` |	A *string*, a connection, or a raw vector. A *string* can be either a path, a url or literal xml. Urls will be converted into connections either using `base::url` or, if installed, `curl::curl`. Local paths ending in `.gz`, `.bz2`, `.xz`, `.zip` will be automatically uncompressed. If a connection, the complete connection is read into a raw vector before being parsed. |
+`encoding` | Specify a default encoding for the document. Unless otherwise specified XML documents are assumed to be in `UTF-8` or `UTF-16`. If the document is not `UTF-8/16`, and lacks an explicit encoding directive, this allows you to supply a default. |
+`as_html` | Optionally parse an xml file as if it's html. |
+`options` | Set parsing options for the libxml2 parser. |
+`base_url` | When loading from a connection, raw vector or literal html/xml, this allows you to specify a base url for the document. Base urls are used to turn relative urls into absolute urls. |
+`n` | If file is a connection, the number of bytes to read per iteration. Defaults to 64kb. |
+`verbose` | When reading from a slow connection, this prints some output on every iteration so you know its working. |  
+
+Using the function described above, we will import olive data from the [GGobi Book](http://www.ggobi.org/book/).
+```{r}
+# example 6: read in a XML file of olive data
+olive_xml <- xml2::read_xml("data/olive.xml")
+
+# get all the <record>s
+recs <- xml2::xml_find_all(olive_xml, "//record")
+
+# get column names from the two variable descriptions
+cols <- xml2::xml_attr(xml2::xml_find_all(olive_xml,
+                                          "//data/variables/*[self::categoricalvariable or self::realvariable]"), "name")
+
+# this converts each set of <record> columns to a data frame after first converting each row to numeric and assigning names to each column
+olive_xml_dat <- tibble::as_tibble(do.call(rbind, 
+                                           lapply(strsplit(trimws(xml2::xml_text(recs)), 
+                                                           "\ +"), 
+                                                  function(x) {
+                                                    data.frame(rbind(setNames(as.numeric(x),cols)))
+                                                    })))
+
+# then assign the area name column to the tibble
+olive_xml_dat$area_name <- trimws(xml2::xml_attr(recs, "label"))
+
+# view the structure of the read in data object
+str(olive_xml_dat)
+```  
+  
+### Exporting Data      
+To export a XML file, we can use the `xml2::write_xml` function. To investigate the parameters this function takes, type `?xml2::write_xml` into the console. You should see a bunch of helpful information in the **Viewer Console**. The following arguments can be passed to this function:  
+
+Argument |                     Definition                      |
+--------- | -------------------------------------------------- |
+`x` | A document or node to write to disk. It's not possible to save nodesets containing more than one node. |
+`file` | Path to file or connection to write to. |
+
+We will now write the XML file we read in to disc using the following code.  
+```{r}
+# write data from example 6 to disc
+xml2::write_xml(olive_xml, "data/olive_out.xml")
+```
+ 
+
+<a name="json"/>  
+
+## JSON Data Files  
+### Importing Data  
+When importing JSON files we can use the [`jsonlite`](https://github.com/jeroen/jsonlite#jsonlite) package. The parameters that can be passed when reading in data using `jsonlite::fromJSON()` include:  
+
+Argument |                     Definition                      |
+-------- | --------------------------------------------------- |
+`txt` | a *JSON string*, *URL* or *file* |
+`simplifyVector` | 	coerce JSON arrays containing only primitives into an atomic vector |
+`simplifyDataFrame` | coerce JSON arrays containing only records (JSON objects) into a data frame |
+`simplifyMatrix` | 	coerce JSON arrays containing vectors of equal mode and dimension into matrix or array |
+`flatten` |	automatically flatten nested data frames into a single non-nested data frame |
+`x` |	the object to be encoded |
+`dataframe` | how to encode `data.frame` objects: must be one of 'rows', 'columns' or 'values' |
+`matrix` | how to encode matrices and higher dimensional arrays: must be one of 'rowmajor' or 'columnmajor' |
+`Date` | how to encode Date objects: must be one of 'ISO8601' or 'epoch' |
+`POSIXt` | how to encode POSIXt (datetime) objects: must be one of 'string', 'ISO8601', 'epoch' or 'mongo' |
+`factor` | how to encode factor objects: must be one of 'string' or 'integer' |
+`complex` | how to encode complex numbers: must be one of 'string' or 'list' |
+`raw`	| how to encode raw objects: must be one of 'base64', 'hex' or 'mongo' |
+`null` | how to encode NULL values within a list: must be one of 'null' or 'list' |
+`na` | how to print NA values: must be one of 'null' or 'string'. Defaults are class specific |
+`auto_unbox` | automatically unbox all atomic vectors of length 1. It is usually safer to avoid this and instead use the unbox function to unbox individual elements. An exception is that objects of class `AsIs` (i.e. wrapped in `I()`) are not automatically unboxed. This is a way to mark single values as length-1 arrays. |
+`digits` | max number of decimal digits to print for numeric values. Use `I()` to specify significant digits. Use `NA` for max precision. |
+`pretty` | adds indentation whitespace to JSON output. Can be `TRUE/FALSE` or a number specifying the number of spaces to indent. See `prettify` |
+`force` | unclass/skip objects of classes with no defined JSON mapping |
+
+Using the function described above, we will read in complaint data.
+```{r}
+# example 7: read in a JSON file of consumer complaints data
+cc_json <- jsonlite::fromJSON("data/consumer_complaint.json", simplifyDataFrame = TRUE)
+
+# view the structure of the read in data object
+str(cc_json)
+```
+  
+### Exporting Data  
+To export a JSON file, we can use the `jsonlite::toJSON()` function. To investigate the parameters this function takes, type `?jsonlite::toJSON()` into the console. You should see a bunch of helpful information in the **Viewer Console**. The arguments listed for importing JSON data can also be passed to this function.   
+
+We will now write the JSON file we read in to disc using the following code.  
+```{r}
+# write data from example 7 to disc
+write(jsonlite::toJSON(cc_json), "data/consumer_complaint_out.json")
+```
+ 
+ 
+
+<a name="Rdata"/>  
+
+## R Data Files  
+### Importing Data  
+Sometimes we may want to import data from a `.rds` file. These files are R objects. The parameters that can be passed when reading in data using `read_RDS()` include:  
+
+Argument |                     Definition                      |
+-------- | --------------------------------------------------- |
+`object` | *R object* to serialize. |
+`file` | a connection or the name of the file where the *R object* is saved to or read from. |
+`ascii` | *a logical*. If `TRUE` or `NA`, an `ASCII` representation is written; otherwise (default), a binary one is used. See the comments in the help for save. |
+`version` |	the workspace format version to use. `NULL` specifies the current default version (3). |
+`compress` | *a logical* specifying whether saving to a named file is to use "gzip" compression, or one of "gzip", "bzip2" or "xz" to indicate the type of compression to be used. Ignored if file is a connection. |
+`refhook` |	*a hook function* for handling reference objects. |  
+
+Using the function described above, we will read in air passenger data.
+```{r}
+# example 8: read in a R dataset file
+AirPassengers_rds <- readRDS("data/AirPassengers.rds")
+
+# view the structure of the read in data object
+str(AirPassengers_rds)
+```
+  
+### Exporting Data  
+To export data to an RData set, we can use the `writeRDS()` function. To investigate the parameters this function takes, type `?writeRDS()` into the console. You should see a bunch of helpful information in the **Viewer Console**. The arguments listed for `readRDS()` can also be passed to this function.  
+
+We will now write the air passengers data file we read in to disc using the following code.  
+```{r}
+# write data from example 8 to disc
+saveRDS(AirPassengers_rds, "data/AirPassengers_out.rds")
+```
+
+
+### Document Workspace Information
+```{r}
+sessionInfo()
+```
