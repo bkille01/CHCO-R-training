@@ -1,0 +1,580 @@
+---
+title: "CHCO Training - Example Report"
+subtitle: "Creating Report from a Database Query"
+author: "Tiffany J. Callahan"
+date: "09/13/2018"
+output:
+  html_notebook:
+    df_print: paged
+---
+
+
+#### Contents:  
+
+  * [Query a Database](#dbq)  
+  * [Data Exploration](#dp)  
+    * [Demographics](#demo)  
+    * [Diagnoses](#diag)  
+    * [Vitals](#vitals)  
+    * [Medications](#meds)  
+  * [Output Data](#op)  
+
+This R Notebook is meant to provide example code for to create a report summarizing data queried using a database connection. The report will detail how to query a database, manipulate query results, run descriptive statistics, create visualizations, and output a csv file.  
+
+```{r message=FALSE, warning=FALSE}
+# set-up custom color themes to use throughout
+my_colors <- c("#44AF69", "#F8333C", "#FCAB10", "#2B9EB3", "#DBB6B6")
+
+# create a general potting function
+theme_lyrics <- function() 
+{
+  theme(plot.title = ggplot2::element_text(hjust = 0.5),
+        axis.text.x = ggplot2::element_blank(), 
+        axis.ticks = ggplot2::element_blank(),
+        panel.grid.major = ggplot2::element_blank(),
+        panel.grid.minor = ggplot2::element_blank(),
+        legend.position = "none")
+}
+
+# customize the text tables for consistency using HTML formatting
+my_kable_styling <- function(dat, caption) {
+  kableExtra::kable(dat, "html", escape = FALSE, caption = caption) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed", "bordered"),
+                full_width = FALSE)
+}
+```
+
+---
+<a name="dbq"/>
+
+### Query a Database
+All of the data that will be used in this report will be queried from a database. For this example, we will be combining data from four different queries. As shown below, the queries include demographics, diagnoses, vitals, and medications. As discussed during the training, we will focus on leveraging [`tidyverse`](https://www.tidyverse.org/) libraries and functions as much as possible.
+```{r message=FALSE, warning=FALSE, evaluate=FALSE}
+# download needed libraries
+library(odbc)
+library(dplyr)
+library(readr)
+
+
+## QUERY 1 - Demographics
+# parse query from GitHub Gist and save it as a variable
+query1 <- gsub(".*/  ", "",
+paste0(readLines("https://gist.github.com/callahantiff/554615da9d65cc868adae04a79e5b373/raw/CLTST_Queries_Demographics.sql"),
+collapse=" "))
+
+# pass query variable to function to query database
+patient_demo <- DBI::dbGetQuery(con, query1)
+
+
+## QUERY 2 - Diagnoses
+# parse query from GitHub Gist and save it as a variable
+query2 <- gsub(".*/  ", "",
+paste0(readLines("https://gist.githubusercontent.com/callahantiff/554615da9d65cc868adae04a79e5b373/raw/9efe9ce39d99870cac9f06b99d90eb6a3c68fae6/CLTST_Queries_Diagnoses.sql"),
+collapse=" "))
+
+# pass query variable to function to query database
+patient_diag <- DBI::dbGetQuery(con, query2)
+
+
+## QUERY 3 - Flow Sheet Vitals
+# parse query from GitHub Gist and save it as a variable
+query3 <- gsub(".*/  ", "",
+paste0(readLines("https://gist.githubusercontent.com/callahantiff/554615da9d65cc868adae04a79e5b373/raw/9efe9ce39d99870cac9f06b99d90eb6a3c68fae6/CLTST_Queries_FlowSheet.sql"),
+collapse=" "))
+
+# pass query variable to function to query database
+patient_vitals <- DBI::dbGetQuery(con, query3)
+
+
+## QUERY 4 - Medications
+# parse query from GitHub Gist and save it as a variable
+query4 <- gsub(".*/  ", "",
+paste0(readLines("https://gist.githubusercontent.com/callahantiff/554615da9d65cc868adae04a79e5b373/raw/9efe9ce39d99870cac9f06b99d90eb6a3c68fae6/CLTST_Queries_Medications.sql"),
+collapse=" "))
+
+# pass query variable to function to query database
+patient_meds <- DBI::dbGetQuery(con, query4)
+
+```
+---
+
+---
+</br></br> 
+<a name="dp"/>
+
+### Data Exploration  
+Once the queries have been run, we will explore the data. To give you a feel for the `tidyverse` functionality within the context of the `CLTST` data, each of the four queries will be independently explored.  
+---
+
+<a name="demo"/>
+
+#### Demographics  
+The `dplyr::glimpse` function does the following: "This is like a transposed version of print(): columns run down the page, and data runs across. This makes it possible to see every column in a data frame. It's a little like `str()` applied to a data frame but it tries to show you as much data as possible. (And it always shows the underlying data, even when applied to a remote data source.)."
+```{r message=FALSE, warning=FALSE}
+# download needed libraries
+library(tidyverse)
+
+## Patient Demographics
+# view a snapshot of the data
+dplyr::glimpse(patient_demo)
+```
+
+
+</br></br>  
+**Add New Variables**  
+Here, we use the `dplyr::mutate` function to create new variables. We are using these functions to recode existing variables in our `tibble`. Here, we introduce a new function `ifelse`, which "returns a value with the same shape as test which is filled with elements selected from either yes or no depending on whether the element of test is `TRUE` or `FALSE`." When combined with `dplyr::mutate`, we can recode a variable using specific variable values.
+```{r message=FALSE, warning=FALSE}
+# create a variable to store age as categories
+patient_demo <- patient_demo %>% dplyr::mutate(AGE_CAT =
+                                              ifelse(patient_demo$AGE %in% 1:9, "<10",
+                                              ifelse(patient_demo$AGE %in% 10:20, "10-20",
+                                              ifelse(patient_demo$AGE %in% 21:30, "20-30",
+                                              ifelse(patient_demo$AGE %in% 31:35, ">30",
+                                              "NA")))))
+
+# create a variable to rename sex lables
+patient_demo <- patient_demo %>% dplyr::mutate(SEX_RECODE = ifelse(patient_demo$SEX %in% "F", "Female", "Male"))
+```
+
+
+</br></br>  
+**Summary Statistics**  
+To print summary statistics of the full `tibble`, we can use the `Hmisc::describe` function. This function provides the n, nmiss, unique, mean, 5,10,25,50,75,90,95th percentiles, and the 5 lowest and 5 highest scores for every variable in the `tibble`.
+```{r message=FALSE, warning=FALSE}
+# load needed libraries
+library(Hmisc)
+library(knitr)
+
+# summarize data frame
+Hmisc::describe(patient_demo)
+```
+
+
+</br></br>  
+**Counts of Patients by State, County, and Zip Code**  
+Explore the data frame by creating a table of counts of patients by state, county, and zip code. To provide you with some additional functionality in R, I have created a table and then used `html` to clean up the formatting and add color. When using this approach, the raw html code is not run from the markdown chunk. Instead, the code in the markdown chunk is used to generate the raw html code, which is then paste outside of the markdown chunk.
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+# get counts of 
+patient_demo %>% 
+  dplyr::group_by(STATE,COUNTY, ZIP) %>%
+  dplyr::select(STATE, COUNTY, ZIP) %>%
+  dplyr::arrange() %>%
+  dplyr::count() %>%
+  dplyr::mutate(n = formattable::color_tile("light green","light green")(n)) %>%
+  my_kable_styling(caption = "Count of Patients by State, County, and Zip")
+```
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>Count of Patients by State, County, and Zip</caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;"> STATE </th>
+   <th style="text-align:left;"> COUNTY </th>
+   <th style="text-align:right;"> ZIP </th>
+   <th style="text-align:left;"> n </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> California </td>
+   <td style="text-align:left;"> LOS ANGELES </td>
+   <td style="text-align:right;"> 90210 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">60</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> ADAMS </td>
+   <td style="text-align:right;"> 80030 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> ADAMS </td>
+   <td style="text-align:right;"> 80045 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">154</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> ARAPAHOE </td>
+   <td style="text-align:right;"> 80010 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> ARAPAHOE </td>
+   <td style="text-align:right;"> 80013 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> ARAPAHOE </td>
+   <td style="text-align:right;"> 80017 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> ARAPAHOE </td>
+   <td style="text-align:right;"> 80111 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> ARAPAHOE </td>
+   <td style="text-align:right;"> 80112 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">23</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> BROOMFIELD </td>
+   <td style="text-align:right;"> 80023 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">21</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> DENVER </td>
+   <td style="text-align:right;"> 80045 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> DENVER </td>
+   <td style="text-align:right;"> 80206 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> DENVER </td>
+   <td style="text-align:right;"> 80207 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> DENVER </td>
+   <td style="text-align:right;"> 80212 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">7</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> DENVER </td>
+   <td style="text-align:right;"> 80238 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">7</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> DOUGLAS </td>
+   <td style="text-align:right;"> 80124 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> DOUGLAS </td>
+   <td style="text-align:right;"> 80138 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> EL PASO </td>
+   <td style="text-align:right;"> 80910 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">19</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> JEFFERSON </td>
+   <td style="text-align:right;"> 80001 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> JEFFERSON </td>
+   <td style="text-align:right;"> 80004 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> JEFFERSON </td>
+   <td style="text-align:right;"> 80005 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">7</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> JEFFERSON </td>
+   <td style="text-align:right;"> 80123 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> JEFFERSON </td>
+   <td style="text-align:right;"> 80218 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">29</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> JEFFERSON </td>
+   <td style="text-align:right;"> 80401 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">17</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80013 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80031 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">5</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80045 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">24</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80046 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80123 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">4</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80220 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80222 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">4</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80234 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">5</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80238 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">4</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80239 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">17</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80247 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80249 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Colorado </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> 80525 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">8</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Texas </td>
+   <td style="text-align:left;"> TRAVIS </td>
+   <td style="text-align:right;"> 78739 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> Wisconsin </td>
+   <td style="text-align:left;"> OUTAGAMIE </td>
+   <td style="text-align:right;"> 54913 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #90ee90">35</span> </td>
+  </tr>
+</tbody>
+</table>
+
+
+</br></br>  
+**Get Counts of Patient Age Categories by State**  
+The code below uses `tidyverse` functions to summarize and group data. Then, this same code is combined with R `ggplot` functionality to visualize the results. In this example, we are exploring the counts of patients by gender and state. From the table and plot we can see that only Colorado contains patients from all age categories and Colorado is also the only state with missing data. Additionally, we can see that for all states, most patients are under 10 years of age.
+```{r message=FALSE, warning=FALSE}
+# load needed libraries
+library(ggplot2)
+
+# get counts of patient age categories by state
+patient_demo %>%
+  dplyr::group_by(STATE, AGE_CAT) %>%
+  dplyr::summarise(number_of_patients = n())
+
+# visualize results
+patient_demo %>%
+  dplyr::group_by(STATE, AGE_CAT) %>%
+  dplyr::summarise(number_of_patients = n()) %>%
+  ggplot() +
+  ggplot2::geom_bar(aes(x = STATE, y = number_of_patients,
+                        fill = AGE_CAT), stat = "identity")  +
+  ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5),
+                 legend.title = ggplot2::element_blank(),
+                 panel.grid.minor = ggplot2::element_blank()) +
+  ggplot2::labs(x = NULL, y = "Patient Count") +
+  ggplot2::ggtitle("Counts of Patient Age Categories by State") +
+  ggplot2::coord_flip()
+```
+
+
+
+</br></br>  
+**Get Counts of Patient Age Categories by County**  
+The code below uses `tidyverse` functions to summarize and group data. Then, this same code is combined with R `ggplot` functionality to visualize the results. In this example, we are exploring counts of patient age categories by county. From the plot we can see that Adams county contains the most patients and among these patients the majority are under the age of 10.
+```{r message=FALSE, warning=FALSE}
+# get counts of patient age categories by county
+patient_demo %>%
+  dplyr::group_by(COUNTY, AGE_CAT) %>%
+  dplyr::summarise(number_of_patients = n())
+
+# plot results
+patient_demo %>%
+  dplyr::group_by(COUNTY, AGE_CAT) %>%
+  dplyr::summarise(number_of_patients = n()) %>%
+  ggplot() +
+  ggplot2::geom_bar(aes(x = COUNTY, y = number_of_patients,
+                        fill = AGE_CAT), stat = "identity")  +
+  ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5),
+                 legend.title = ggplot2::element_blank(),
+                 panel.grid.minor = ggplot2::element_blank()) +
+  ggplot2::labs(x = NULL, y = "Patient Count") +
+  ggplot2::ggtitle("Counts of Patient Age Categories by State") +
+  ggplot2::coord_flip()
+```
+
+
+
+</br></br>  
+**Get Counts of Race by State**  
+The code below uses `tidyverse` functions to summarize and group data. Then, this same code is combined with R `ggplot` functionality to visualize the results. In this example, we are exploring counts of race by state. Here, we implement plots using a faceted output where each state is shown as it's own bar plot. From this plot we can see that all patients from California choose not to report their race, race is missing for patients from Texas, all patients from Wisconsin are white, and while the majority of patients from Colorado are white, there are also black, American Indian, and Asian patients.
+```{r message=FALSE, warning=FALSE}
+# race - group by state
+state_counts <- patient_demo %>% 
+  dplyr::group_by(STATE) %>%
+  dplyr::count(RACE, STATE, sort = TRUE) %>%
+  dplyr::slice(seq_len(8)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(STATE,n) %>%
+  dplyr::mutate(row = row_number()) 
+
+# visualize results
+state_counts %>%
+  ggplot(aes(row, n, fill = STATE)) +
+    ggplot2::geom_col(show.legend = FALSE) +
+    ggplot2::labs(x = NULL, y = "Race Count") +
+    ggplot2::ggtitle("Race by State") + 
+    theme_lyrics() + 
+  ggplot2::facet_wrap(~STATE, scales = "free") +
+  ggplot2::scale_x_continuous(
+      breaks = state_counts$row,
+      labels = state_counts$RACE) +
+    ggplot2::coord_flip()
+```
+
+</br></br>  
+**Get Counts of Gender by County**  
+The code below uses `tidyverse` functions to summarize and group data. Then, this same code is combined with R `ggplot` functionality to visualize the results. In this example, we are exploring counts of gender categories by county. Here, we have implemented a similar plot output as the prior example. In this example, we can see that all counties except for Douglas, El Paso, and Travis have both male and female patients.
+```{r message=FALSE, warning=FALSE}
+# gender - group by state
+county_counts <- patient_demo %>% 
+  dplyr::group_by(COUNTY) %>%
+  dplyr::count(SEX_RECODE, COUNTY, sort = TRUE) %>%
+  dplyr::slice(seq_len(8)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(COUNTY,n) %>%
+  dplyr::mutate(row = row_number()) 
+
+# generate plot
+zip_counts %>%
+  ggplot(aes(row, n, fill = COUNTY)) +
+    ggplot2::geom_col(show.legend = FALSE) +
+    ggplot2::labs(x = NULL, y = "Gender Count") +
+    ggplot2::ggtitle("Gender by Zipcode") + 
+    theme_lyrics() + 
+  ggplot2::facet_wrap(~COUNTY, scales = "free") +
+  ggplot2::scale_x_continuous(
+      breaks = county_counts$row,
+      labels = county_counts$SEX_RECODE) +
+    ggplot2::coord_flip()
+```
+
+
+
+</br></br>  
+<a name="diag"/>
+
+#### Diagnoses
+```{r}
+## ADD YOUR CODE HERE
+
+```
+
+
+
+</br></br>  
+<a name="vitals"/>
+
+#### Flowsheet Vitals
+```{r}
+## ADD YOUR CODE HERE
+
+```
+
+
+
+</br></br>  
+<a name="meds"/>
+
+#### Medications
+```{r}
+## ADD YOUR CODE HERE
+
+```
+
+
+</br></br>  
+<a name="op"/>
+
+### Output Data
+The following code chunk demonstrates how to export a `tibble` to a csv file in the current working directory.
+```{r}
+## output modified data to csv in working directory
+
+## Patient Demographics
+write.csv(patient_demo, file = "patient_demo.csv")
+
+## Patient Diagnoses
+
+
+## Patient Vitals
+
+
+## Patient Medications
+
+```
+
+
+</br></br>  
+**Session Information:**  
+Here, we print information related to the libraries that were needed to run the code included in this example report.
+```{r message=FALSE, warning=FALSE}
+sessionInfo()
+```
+
