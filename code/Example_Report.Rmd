@@ -1,11 +1,8 @@
 ---
 title: "CHCO Training - Example Report"
-subtitle: "Creating Report from a Database Query"
 author: "Tiffany J. Callahan"
 date: "09/13/2018"
-output:
-  html_notebook:
-    df_print: paged
+output: html_notebook
 ---
 
 
@@ -502,7 +499,7 @@ county_counts <- patient_demo %>%
   dplyr::mutate(row = row_number()) 
 
 # generate plot
-zip_counts %>%
+county_counts %>%
   ggplot(aes(row, n, fill = COUNTY)) +
     ggplot2::geom_col(show.legend = FALSE) +
     ggplot2::labs(x = NULL, y = "Gender Count") +
