@@ -1,0 +1,149 @@
+---
+title: "CHCO R Training"
+subtitle: "Hands-on Experience using swirl"
+author: "Tiffany J. Callahan"
+output: html_notebook
+---
+
+# Purpose
+This [R Markdown Notebook](http://rmarkdown.rstudio.com) is intended to be used for all [swirl](https://swirlstats.com/) lessons as part of the CHCO R Training. It contains all the code needed to download and install all R swirl lessons. It also includes. Participants in the training are encouraged to create a new code chunk for each lesson. Participants should this to document their progress and to note areas for improvement.
+
+### Tips and Tricks
+  * When you execute code within the notebook, the results appear beneath the code.  
+  * Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*.  
+  * Several arguments can be passed to each R chunk. For more information, please see the documentation provided [here](https://yihui.name/knitr/options/). For thr purposes of this training, we will provide the minimum arguments needed to run the code.
+
+## Install and Load swirl  
+While not necessary for all R packages, for swirl, we need to manually download and install the lesson plans in addition to performing a normal installation.
+```{r}
+# install swirl package
+install.packages("swirl")
+
+# load the swirl library
+library(swirl)
+```
+
+Now that we have installed and loaded the swirl package, we need to download and manually install the full set of lesson plans. Complete documentation of how to do this can be found [here](https://github.com/swirldev/swirl_courses). We can do this programmatically using the functions that are part of the `utils` library and the code that is included below.  
+
+```{r}
+# download the swirl lessons master file
+download.file(url="https://github.com/swirldev/swirl_courses/archive/master.zip", destfile="swirl_course-master.zip")
+
+# install the courses
+swirl::install_course_zip("swirl_course-master.zip", multi=TRUE)
+
+# start swirl
+swirl()
+```
+
+## swirl Lessons  
+  * [Training: Day 1](#td1)  
+  * [Training: Day 2](#td2)  
+  * [Training: Day 3](#td3)  
+  * [Training: Day 4](#td4)  
+        
+Great work! Now that we have installed swirl and all of the lesson plans it's time to start programming. The remainder of the script is meant to be provide you with space to document your progress when completing the lesson plans. A basic template for each of the lesson plans has been provided below.   
+
+
+<a name="td1"/>
+
+### Training: Day 1 
+#### R Programming Alt
+This lesson is comprised of several sub-lessons. To document each lesson that you complete a table, with a row for each sub-lesson has been provided below. Within this table you will notice a column for specifying anything interesting or challenging that you found when completing each sub-lesson. This space can also be used to document things you learn and want to remember (e.g. `getwd()` prints your current working directory path).
+
+| Sub-Lesson | Start Date | Completion Date |          Notes          |        
+| ---------- | ---------- | ----------------| ----------------------- |
+| Workspace and Files | xx-xx-xxxx | xx-xx-xxxx | Document anything that was interesting or challenging to you |
+| Basic Building Blocks |    |    |    |
+| Sequences of Numbers | | | |  
+| Logic | | | |  
+| Vectors | | | |
+| Subsetting Vectors | | | |
+| Matrices and Data Frames | | | |
+
+
+<a name="td2"/>  
+
+### Training: Day 2 
+#### R Programming Alt
+
+| Sub-Lesson | Start Date | Completion Date |          Notes          |        
+| ---------- | ---------- | ----------------| ----------------------- |
+| Looking at Data | xx-xx-xxxx | xx-xx-xxxx | Document anything that was interesting or challenging to you |
+| Missing Values |    |    |    |
+| lapply and sapply | | | |  
+| vapply and tapply | | | |  
+| Functions | | | |  
+
+
+<a name="td3"/>
+
+### Training: Day 3 
+#### Data Analysis
+
+| Sub-Lesson | Start Date | Completion Date |          Notes          |        
+| ---------- | ---------- | ----------------| ----------------------- |
+| Central Tendency | xx-xx-xxxx | xx-xx-xxxx | Document anything that was interesting or challenging to you |
+| Dispersion |    |    |    |
+| Data Visualization | | | |
+
+#### Exploratory Analysis
+
+| Sub-Lesson | Start Date | Completion Date |          Notes          |        
+| ---------- | ---------- | ----------------| ----------------------- |
+| Principles of Analytic Graphs | xx-xx-xxxx | xx-xx-xxxx | Document anything that was interesting or challenging to you |
+| GGplot Part1 |    |    |    |  
+| GGplot Part2 |    |    |    |  
+| Graphics Devices in R |    |    |    |  
+| Base Plotting System |    |    |    |
+| Plotting Systems | | | |
+| Exploratory Graphs | | | |  
+   
+   
+<a name="td4"/>    
+  
+### Training: Day 4 
+#### Mathematical Biostatistics Boot Camp
+
+| Sub-Lesson | Start Date | Completion Date |          Notes          |        
+| ---------- | ---------- | ----------------| ----------------------- |
+| Errors Power and Sample Size | xx-xx-xxxx | xx-xx-xxxx | Document anything that was interesting or challenging to you |
+| One Sample t-Test |    |    |    |
+| Two Sample t-Test | | | |
+
+#### Regression Models
+
+| Sub-Lesson | Start Date | Completion Date |          Notes          |        
+| ---------- | ---------- | ----------------| ----------------------- |
+| Introduction | xx-xx-xxxx | xx-xx-xxxx | Document anything that was interesting or challenging to you |
+| Binary Outcomes |    |    |    |  
+| Count Outcomes |    |    |    |  
+| Least Squares Estimation |    |    |    |  
+| Overfitting anf Underfitting |    |    |    |  
+| Variance Inflation Factors |    |    |    | 
+| Residuals |    |    |    | 
+| Residuals Diagnostics and Variations |    |    |    | 
+| Residual Variation |    |    |    | 
+| Introduction to Multivariate Regression |    |    |    | 
+| MultiVar Examples |    |    |    | 
+| MultiVar Examples2 |    |    |    | 
+| MultiVar Examples3 |    |    |    | 
+
+#### Statistical Inference
+
+| Sub-Lesson | Start Date | Completion Date |          Notes          |        
+| ---------- | ---------- | ----------------| ----------------------- |
+| Introduction | xx-xx-xxxx | xx-xx-xxxx | Document anything that was interesting or challenging to you |
+| Probability1 |    |    |    |  
+| Probability2 |    |    |    |  
+| ConditionalProbability |    |    |    |  
+| Expectations |    |    |    |
+| Variance | | | |
+| CommonDistros | | | |  
+| Asymptotics | | | |  
+| T Confidence Intervals | | | |  
+| Hypothesis Testing | | | |  
+| P Values | | | |  
+| Power | | | |  
+| Multiple Testing | | | |  
+| Resampling | | | |

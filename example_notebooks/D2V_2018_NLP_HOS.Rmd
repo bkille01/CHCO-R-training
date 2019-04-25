@@ -1,0 +1,2152 @@
+---
+title: "D2V NLP Workshop"
+author: "Tiffany J. Callahan"
+date: "05/12/2018"
+output:
+  html_document:
+    df_print: paged
+subtitle: 'Hands-On Session: Building a Pipeline and Running an Experiment'
+---
+
+---
+
+#### Contents:
+
+* [Data Processing](#dataproc)
+* [Exploration & Descriptive Statistics](#explor)
+* [Sentiment Analysis](#sentan)
+* [Classification](#classif)
+* [Biomedical Application](#biomed)
+* [Resources](#resource)
+* [Session Information](#sess)
+
+This session is meant to provide workshop attendees with hands-on experience building a natural language processing (NLP) pipeline and running a simple experiment. While we will provide the code needed to run the experiment, we will also provide links to additional coding resources. We strongly encourage attendees to expand and build on this code using these links as well as well as their own resources. To make this task fun as well as entertaining, we will build on and expand some [Data Camp tutorials](https://www.datacamp.com/community/tutorials/R-nlp-machine-learning). The goal of these tutorials is to provide users with an overview of how to build simple NLP pipelines and utilize simple text mining techniques within the R [tidy framework](https://www.tidyverse.org/). Today we will examine songs by the artist Prince.
+
+---
+
+<a name="dataproc"/>
+
+### Data Processing
+Before we can build our pipeline we need to set-up our environment by loading the specific R libraries containing the functions that we will need for the pipeline. I have also created functions for plotting, set color palettes and themes, and set style parameters for tables.
+
+```{r message=FALSE, warning=FALSE}
+## Set-Up Environment
+# load needed libraries
+library(circlize) #chord diagram
+library(caret)
+library(corpustools)
+library(dplyr) #data manipulation
+library(doMC) # Library for parallel processing
+library(e1071)
+library(easyGgplot2)
+library(ggraph) #ngram network diagrams
+library(ggplot2) #visualizations
+library(ggrepel) #`geom_label_repel`
+library(gridExtra) #viewing multiple plots together
+library(formattable) #for the color_tile function
+library(igraph) #ngram network diagrams
+library(kableExtra) #create a nicely formated HTML table
+library(knitr) #for dynamic reporting
+library(quanteda) #text processing functionality
+library(RCurl) #loading data from url
+library(RTextTools)
+library(spacyr) #very powerful text mining library
+library(SnowballC) #for stemming
+library(tidyr) #Spread, separate, unite
+library(tidytext) #text mining
+library(tm) # general text mining functions, making document term matrixes
+library(topicmodels)
+library(widyr) #Use for pairwise correlation
+library(wordcloud2) #creative visualizations
+library(yarrr)  #Pirate plot
+```
+
+```{r message=FALSE, warning=FALSE}
+# set-up custom color themes to use throughout
+my_colors <- c("#44AF69", "#F8333C", "#FCAB10", "#2B9EB3", "#DBB6B6")
+
+# create a general potting function
+theme_lyrics <- function() 
+{
+  theme(plot.title = ggplot2::element_text(hjust = 0.5),
+        axis.text.x = ggplot2::element_blank(), 
+        axis.ticks = ggplot2::element_blank(),
+        panel.grid.major = ggplot2::element_blank(),
+        panel.grid.minor = ggplot2::element_blank(),
+        legend.position = "none")
+}
+
+# customize the text tables for consistency using HTML formatting
+my_kable_styling <- function(dat, caption) {
+  kableExtra::kable(dat, "html", escape = FALSE, caption = caption) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed", "bordered"),
+                full_width = FALSE)
+}
+```
+</br>  
+
+#### Loading Data  
+Before we can build our pipeline we need data to analyze. For this workshop, we will be analyzing data scraped from the [Billboard Charts](https://s3.amazonaws.com/assets.datacamp.com/blog_assets/prince_raw_data.csv). The data consists of 824 songs written by Prince and for each song we have:  
+  * **Lyrics**: lyrics for each song (string)  
+  * **Song**: the song title (string)  
+  * **Year**: the year the song was released (integer)  
+  * **Album**: the name of the album (character)  
+  * **Peak**: the highest spot on the charts the song reached (integer)  
+  * **Genres**: several columns of genres for different countries (character)  
+
+The data can be accessed using via hyperlink above to 'Billboard Charts' or it can be download from the Web directly. Below, I have provided code that uses the `RCurl` library. Using this library, we download the file and save it to an R *data.frame*. Once we have created the *data.frame*, we examine the data. Our data has `r nrow(data)` rows and `r NCOL(data)` columns with has the following columns: `r names(data)`. We can also remove columns from the data set that we know we will not use for analysis. For this pipeline, we can remove most of the genre columns. To peek at the structure of the data, we can use `dplyr::glimpse`.
+
+```{r message=FALSE, warning=FALSE}
+## Load Data ====
+
+# access data via URL
+myfile <- RCurl::getURL('https://s3.amazonaws.com/assets.datacamp.com/blog_assets/prince_raw_data.csv',
+                        ssl.verifyhost=FALSE,
+                        ssl.verifypeer=FALSE)
+
+# read data into data frame
+data <- read.csv(textConnection(myfile),
+                        header=T,
+                        stringsAsFactors = FALSE)
+
+# remove unwanted columns
+data <- data %>% dplyr::select(lyrics = text, song, year, album, peak, us_pop = US.Pop, us_rnb = US.R.B)
+
+# take a peek at the first row data
+dplyr::glimpse(data[1,])
+```
+
+</br>  
+
+#### Cleaning Data
+Once the data is loaded, we need to prepare the data for analysis. This process differs widely between investigators, but usually includes the same core sets of tasks. Here, we will clean our data by expanding contractions (e.g. won't would be changed to will not and can't would be changed to can not), removing special characters (e.g. punctuation), and converting all of the text to lower case.
+```{r message=FALSE, warning=FALSE}
+## Clean Data ====
+
+# Contradictions
+fix.contractions <- function(doc) {
+  # "won't" is a special case as it does not expand to "wo not"
+  doc <- gsub("won't", "will not", doc)
+  doc <- gsub("can't", "can not", doc)
+  doc <- gsub("n't", " not", doc)
+  doc <- gsub("'ll", " will", doc)
+  doc <- gsub("'re", " are", doc)
+  doc <- gsub("'ve", " have", doc)
+  doc <- gsub("'m", " am", doc)
+  doc <- gsub("'d", " would", doc)
+  # 's could be 'is' or could be possessive: it has no expansion
+  doc <- gsub("'s", "", doc)
+  return(doc)
+}
+
+# fix (expand) contractions
+data$lyrics <- sapply(data$lyrics, fix.contractions)
+
+
+# Special Characters
+# remove special characters
+data$lyrics <- sapply(data$lyrics, function(x) gsub("[^a-zA-Z0-9 ]", " ", x))
+
+
+# Case
+# convert everything to lower case
+data$lyrics <- sapply(data$lyrics, tolower)
+
+# preview the cleaned data
+data$lyrics[1]
+```
+</br>  
+
+#### Adding Additional Features
+More often than not you will find that to perform a meaningful analysis you need to add some additional information to your data. Here, we can use the existing data to create three new variables:  
+  * **decade** (1970-2010)  
+  * **chart_level** (Top 10, Top 50, Top 100, and Uncharted)  
+  * **charted** (Charted, Uncharted)  
+
+By creating these variables, we provide additional avenues to investigate the data. Once we have added these variables to the original data, we save a copy of it so we can reference it at a later time.
+```{r message=FALSE, warning=FALSE}
+## Create Additional Features ====
+
+# create a variable to store years as decades
+data <- data %>% dplyr::mutate(decade =
+                               ifelse(data$year %in% 1978:1979, "1970s",
+                               ifelse(data$year %in% 1980:1989, "1980s", 
+                               ifelse(data$year %in% 1990:1999, "1990s", 
+                               ifelse(data$year %in% 2000:2009, "2000s", 
+                               ifelse(data$year %in% 2010:2015, "2010s", 
+                               "NA"))))))
+
+# create a variable for chart level
+data <- data %>% dplyr::mutate(chart_level =
+                               ifelse(data$peak %in% 1:10, "Top 10",
+                               ifelse(data$peak %in% 11:50, "Top 50",
+                               ifelse(data$peak %in% 51:100, "Top 100", 
+                               "Uncharted"))))
+
+# create binary variable to indicate if a song hit the Billboard Charts
+data <- data %>% dplyr::mutate(charted = ifelse(data$peak %in% 1:100, "Charted", "Uncharted"))
+
+# save the dataset with newly added features to .csv
+write.csv(data, file = "Data/prince_new.csv")
+```
+
+</br>  
+
+#### Tokenization
+The final step before analyzing the data is to identify words within the songs that add unneeded noise to the data. In text mining, these types of words are often called stop words. It is in our best interest to remove as many of these prior to analysis as possible. There are many ways to go about this, including creating your own list of words (as shown below *undesirable_words*). You can also access lists available from R libraries like `tidytext::stop_words` and `quanteda::stopwords("english")`. A sample of what the words included in `tidytext::stop_words` is printed below. Our last step is to remove words of length 3 or less.
+```{r message=FALSE, warning=FALSE}
+## Tokenization ====
+
+# create a custom list of meaningless words to remove
+undesirable_words <- c("prince", "chorus", "repeat", "lyrics", 
+                       "theres", "bridge", "fe0f", "yeah", "baby", 
+                       "alright", "wanna", "gonna", "chorus", "verse", 
+                       "whoa", "gotta", "make", "miscellaneous", "2", 
+                       "4", "ooh", "uurh", "pheromone", "poompoom", "3121", 
+                       "matic", " ai ", " ca ", " la ", "hey", " na ", 
+                       " da ", " uh ", " tin ", "  ll", "transcription",
+                       "repeats")
+
+# view the tidytext list of stop words
+head(sample(tidytext::stop_words$word, 15), 15)
+
+# unnest and remove stop, undesirable and short words
+prince_words_filtered <- data %>%
+  tidytext::unnest_tokens(word, lyrics) %>%
+  dplyr::anti_join(tidytext::stop_words) %>%
+  dplyr::distinct() %>%
+  dplyr::filter(!word %in% undesirable_words) %>%
+  dplyr::filter(nchar(word) > 3)
+```
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+# view the tokenized, unsummarized, tidy data structure
+ prince_words_filtered %>% 
+  dplyr::filter(word == "race") %>%
+  dplyr::select(word, song, year, peak, decade, chart_level, charted) %>%
+  dplyr::arrange() %>%
+  dplyr::top_n(10, song) %>%
+  dplyr::mutate(song = formattable::color_tile("plum","plum")(song)) %>%
+  dplyr::mutate(word = formattable::color_tile("aquamarine","aquamarine")(word)) %>%
+  my_kable_styling(caption = "Tokenized Format Example")
+```
+The table below provides an example of what the cleaned, tokenized data looks like for the top 10 songs that include the word race.
+
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>Tokenized Format Example</caption>
+ <thead>
+  <tr>
+   <th style="text-align:center;"> word </th>
+   <th style="text-align:center;"> song </th>
+   <th style="text-align:center;"> year </th>
+   <th style="text-align:center;"> peak </th>
+   <th style="text-align:center;"> decade </th>
+   <th style="text-align:center;"> chart_level </th>
+   <th style="text-align:center;"> charted </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">lovesexy              </span> </td>
+   <td style="text-align:center;"> 1988 </td>
+   <td style="text-align:center;"> 1 </td>
+   <td style="text-align:center;"> 1980s </td>
+   <td style="text-align:center;"> Top 10 </td>
+   <td style="text-align:center;"> Charted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">my tree               </span> </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">positivity            </span> </td>
+   <td style="text-align:center;"> 1988 </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> 1980s </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">race                  </span> </td>
+   <td style="text-align:center;"> 1994 </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> 1990s </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">sexuality             </span> </td>
+   <td style="text-align:center;"> 1981 </td>
+   <td style="text-align:center;"> 88 </td>
+   <td style="text-align:center;"> 1980s </td>
+   <td style="text-align:center;"> Top 100 </td>
+   <td style="text-align:center;"> Charted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">slow love             </span> </td>
+   <td style="text-align:center;"> 1987 </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> 1980s </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">the rest of my life   </span> </td>
+   <td style="text-align:center;"> 1999 </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> 1990s </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">the undertaker        </span> </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">u make my sun shine   </span> </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">race</span> </td>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">welcome 2 the rat race</span> </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> NA </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> Uncharted </td>
+  </tr>
+</tbody>
+</table>
+---
+
+<a name="explor"/>
+
+### Exploration & Descriptive Statistics
+Now that we have cleaned the data, we want to explore how the variables we created interact with the words within the songs. To begin, we graph the counts of songs over time and for each chart level. As shown in the figure below, we can see that most of the songs that Prince wrote never reached the Billboard charts. We can also see that Prince released the greatest number of songs in the 1990's. 
+
+```{r message=FALSE, warning=FALSE}
+#look at the full data set at your disposal
+data %>%
+  dplyr::filter(decade != "NA") %>%
+  dplyr::group_by(decade, chart_level) %>%
+  dplyr::summarise(number_of_songs = n()) %>%
+  ggplot() +
+  ggplot2::geom_bar(aes(x = decade, y = number_of_songs,
+                        fill = chart_level), stat = "identity")  +
+  ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5),
+                 legend.title = ggplot2::element_blank(),
+                 panel.grid.minor = ggplot2::element_blank()) +
+  ggplot2::labs(x = NULL, y = "Song Count") +
+  ggplot2::ggtitle("Charted Songs Over Time") +
+  ggplot2::coord_flip()
+```
+</br></br>
+**Counts of Songs by Decade**  
+We can visualize the same data using a chord diagram, which plots the data in circle and used colored lines to connect different aspects of the circle, which are associated. From this figure, we can see that the orange line from the 1990's is the thickest and that it connects Uncharted. From this information, we can draw similar conclusions as we did with the prior plot.
+```{r message=FALSE, warning=FALSE}
+decade_chart <-  data %>%
+  dplyr::filter(decade != "NA") %>% # remove songs without release dates
+  dplyr::count(decade, charted)  #Get SONG count per chart level per decade. Order determines top or bottom
+
+# reset the circular layout parameters!
+circlize::circos.clear() 
+grid.col = c("1970s" = my_colors[1], "1980s" = my_colors[2], "1990s" = my_colors[3], "2000s" = my_colors[4], "2010s" = my_colors[5], "Charted" = "grey", "Uncharted" = "grey") #assign chord colors
+
+# set the global parameters for the circular layout. Specifically the gap size
+circlize::circos.par(gap.after = c(rep(5, length(unique(decade_chart[[1]])) - 1), 15,
+                         rep(5, length(unique(decade_chart[[2]])) - 1), 15))
+
+# render plto
+circlize::chordDiagram(decade_chart, grid.col = grid.col, transparency = .2)
+title("Relationship Between Chart Songs Over Time")
+```
+
+**Songs that Hit No. 1 on the Billboard Charts**  
+Here, we visualize Prince's songs that hit number 1 on the Billboard Charts by the release year.
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+# songs that hit No. 1 on the charts
+data %>%
+  dplyr::filter(peak == "1") %>%
+  dplyr::select(year, song, peak) %>%
+  dplyr::arrange(year) %>%
+  dplyr::mutate(year = formattable::color_tile("plum1", "plum1")(year)) %>%
+  dplyr::mutate(peak = formattable::color_tile("aquamarine", "aquamarine")(peak)) %>%
+  my_kable_styling(caption = "Prince's No. 1 Songs")
+```
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>Prince's No. 1 Songs</caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;"> year </th>
+   <th style="text-align:left;"> song </th>
+   <th style="text-align:left;"> peak </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1979</span> </td>
+   <td style="text-align:left;"> i wanna be your lover </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1984</span> </td>
+   <td style="text-align:left;"> erotic city </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1984</span> </td>
+   <td style="text-align:left;"> purple rain </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1984</span> </td>
+   <td style="text-align:left;"> when doves cry </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1985</span> </td>
+   <td style="text-align:left;"> around the world in a day </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1986</span> </td>
+   <td style="text-align:left;"> kiss </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1988</span> </td>
+   <td style="text-align:left;"> lovesexy </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1989</span> </td>
+   <td style="text-align:left;"> batdance </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1990</span> </td>
+   <td style="text-align:left;"> thieves in the temple </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1991</span> </td>
+   <td style="text-align:left;"> diamonds and pearls </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">1995</span> </td>
+   <td style="text-align:left;"> the most beautiful girl in the world </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">2006</span> </td>
+   <td style="text-align:left;"> 3121 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffbbff">2007</span> </td>
+   <td style="text-align:left;"> planet earth </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">1</span> </td>
+  </tr>
+</tbody>
+</table>
+
+</br></br>
+**Word Frequency by Song and Chart Level**  
+Here, we explore the counts of words by song and explore what level of the Billboard Charts the songs reached. As shown in the table below, we can see that the majority of the 20 songs with the highest word count never reached the Billboard charts. Only 1 song, "My Name is Prince", which was a Top 10 Billboard Chart song containing 916 words, is included among the the top 20 songs with the greatest word counts.
+```{r message=FALSE, warning=FALSE}
+## Word Frequency
+full_word_count <- data %>%
+  tidytext::unnest_tokens(word, lyrics) %>%
+  dplyr::group_by(song,chart_level) %>%
+  dplyr::summarise(num_words = n()) %>%
+  dplyr::arrange(desc(num_words)) 
+```
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+full_word_count[1:20,] %>%
+  dplyr::ungroup(num_words, song) %>%
+  dplyr::mutate(num_words = formattable::color_bar("aquamarine")(num_words)) %>%
+  dplyr::mutate(song = formattable::color_tile("plum","plum")(song)) %>%
+  my_kable_styling(caption = "20 Songs With Highest Word Count")
+```
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>20 Songs With Highest Word Count</caption>
+ <thead>
+  <tr>
+   <th style="text-align:center;"> song </th>
+   <th style="text-align:center;"> chart_level </th>
+   <th style="text-align:center;"> num_words </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">johnny                 </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 100.00%">1349</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">cloreen bacon skin     </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 93.62%">1263</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">push it up             </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 91.92%">1240</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">the exodus has begun   </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 79.47%">1072</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">wild and loose         </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 76.43%">1031</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">jughead                </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 69.68%">940</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">my name is prince      </span> </td>
+   <td style="text-align:center;"> Top 10 </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 67.90%">916</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">acknowledge me         </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 67.68%">913</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">the walk               </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 65.46%">883</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">the purple medley      </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 64.79%">874</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">extra lovable          </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 64.34%">868</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">segue vi               </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 64.05%">864</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">xtralovable            </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 63.90%">862</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">push                   </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 63.16%">852</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">soul psychodelicide 2  </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 61.75%">833</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">black mf in the house  </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 61.16%">825</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">i rock therefore i am  </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 60.93%">822</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">now                    </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 59.38%">801</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">u gotta shake something</span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 58.64%">791</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">do yourself a favor    </span> </td>
+   <td style="text-align:center;"> Uncharted </td>
+   <td style="text-align:center;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: aquamarine; width: 57.75%">779</span> </td>
+  </tr>
+</tbody>
+</table>
+
+</br></br>  
+**Word Count Distribution**  
+Here we view the distributions of word counts by chart level. From the figure below, we can see that the distributions, regardless of chart level are fairly right skewed, but that the majority of the songs have a word count less than 500.
+```{r message=FALSE, warning=FALSE}
+# visualize distribution of word counts 
+full_word_count %>%
+    easyGgplot2::ggplot2.histogram(xName='num_words', groupName='chart_level',
+    alpha=0.5, position="stack") +
+    ggplot2::ylab("Song Count") + 
+    ggplot2::xlab("Word Count per Song") +
+    ggplot2::ggtitle("Word Count Distribution") +
+    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5),
+                   legend.title = ggplot2::element_blank(),
+                   panel.grid.minor.y = ggplot2::element_blank())
+```
+</br></br>  
+
+**Most Frequent Words**  
+The figure below illustrates the most frequently used words across all of Prince's songs. As shown, the top three most frequently used words include "love", "time", and "girl".
+```{r message=FALSE, warning=FALSE}
+# top words
+prince_words_filtered %>%
+  dplyr::count(word, sort = TRUE) %>%
+  dplyr::top_n(10) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(word = reorder(word, n)) %>%
+  ggplot() +
+    ggplot2::geom_col(aes(word, n), fill = my_colors[4]) +
+    ggplot2::theme(legend.position = "none", 
+          plot.title = ggplot2::element_text(hjust = 0.5),
+          panel.grid.major = ggplot2::element_blank()) +
+    ggplot2::xlab("") + 
+    ggplot2::ylab("Song Count") +
+    ggplot2::ggtitle("Most Frequently Used Words in Prince Lyrics") +
+    ggplot2::coord_flip()
+```
+</br></br>  
+
+**Word Cloud: Top 300 Most Frequent Words**  
+Word Clouds can be really useful tools for visualizing the most frequent words within a corpus. In these images, the size of the word is directly related to the frequency that it occurred. As mentioned above, the most frequent words are "time", "love", and "girl".
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+# word cloud
+prince_words_counts <- prince_words_filtered %>% dplyr::count(word, sort = TRUE) 
+wordcloud2::wordcloud2(prince_words_counts[1:300, ], 
+                       size = .5, 
+                       shape = 'circle', 
+                       fontFamily = "Arial Narrow")
+```
+![](Figures/wc_1.png)
+</br></br>  
+
+**Word Popularity by Billboard Chart Level**:  
+The faceted plots below illustrate the the counts of the top 8 words by chart level. As shown below, we can see that "love", "time", and "money" are the most popular words regardless of chart level.
+```{r message=FALSE, warning=FALSE}
+# Popular words - group by chart level
+popular_words <- prince_words_filtered %>% 
+  dplyr::group_by(chart_level) %>%
+  dplyr::count(word, chart_level, sort = TRUE) %>%
+  dplyr::slice(seq_len(8)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(chart_level,n) %>%
+  dplyr::mutate(row = row_number()) 
+
+# generate plot
+popular_words %>%
+  ggplot(aes(row, n, fill = chart_level)) +
+    ggplot2::geom_col(show.legend = FALSE) +
+    ggplot2::labs(x = NULL, y = "Song Count") +
+    ggplot2::ggtitle("Popular Words by Chart Level") + 
+    theme_lyrics() + 
+  ggplot2::facet_wrap(~chart_level, scales = "free") +
+  ggplot2::scale_x_continuous(  # This handles replacement of row 
+      breaks = popular_words$row, # notice need to reuse data frame
+      labels = popular_words$word) +
+    ggplot2::coord_flip()
+```
+</br></br>  
+
+**Word Popularity by Decade**:  
+The faceted plots below illustrate the the counts of the top 8 words by decade. As shown below, we can see that "love" and are the most popular words over time.
+```{r message=FALSE, warning=FALSE}
+timeless_words <- prince_words_filtered %>% 
+  dplyr::filter(decade != 'NA') %>%
+  dplyr::group_by(decade) %>%
+  dplyr::count(word, decade, sort = TRUE) %>%
+  dplyr::slice(seq_len(8)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(decade,n) %>%
+  dplyr::mutate(row = row_number()) 
+
+# generate plot
+timeless_words %>%
+  ggplot2::ggplot(aes(row, n, fill = decade)) +
+    ggplot2::geom_col(show.legend = FALSE) +
+    ggplot2::labs(x = NULL, y = "Song Count") +
+    ggplot2::ggtitle("Timeless Words") + 
+    theme_lyrics() +  
+    ggplot2::facet_wrap(~decade, scales = "free", ncol = 5) +
+    ggplot2::scale_x_continuous(  # This handles replacement of row
+      breaks = timeless_words$row, # notice need to reuse data frame
+      labels = timeless_words$word) +
+    ggplot2::coord_flip()
+```
+
+</br></br>  
+
+**Word Length Distribution**:  
+The plot below shows the distribution of word length. As shown in the figure, most words in the corpus have a length of less than five characters.
+```{r message=FALSE, warning=FALSE}
+#unnest and remove undesirable words, but leave in stop and short words
+prince_word_lengths <- data %>%
+  tidytext::unnest_tokens(word, lyrics) %>%
+  dplyr::group_by(song,decade) %>%
+  dplyr::distinct() %>%
+  dplyr::filter(!word %in% undesirable_words) %>%
+  dplyr::mutate(word_length = nchar(word)) 
+
+# generate plot
+prince_word_lengths %>%
+  dplyr::count(word_length, sort = TRUE) %>%
+  ggplot2::ggplot(aes(word_length), binwidth = 10) + 
+    ggplot2::geom_histogram(aes(fill = ..count..),
+                   breaks = seq(1,25, by = 2), 
+                   show.legend = FALSE,
+                   fill ="#56B4E9", colour="dodgerblue") + 
+    ggplot2::xlab("Word Length") + 
+    ggplot2::ylab("Word Count") +
+    ggplot2::ggtitle("Word Length Distribution") +
+    ggplot2::theme(plot.title = ggplot2::element_text(hjust = 0.5),
+                   panel.grid.minor = ggplot2::element_blank())
+```
+
+</br></br>  
+
+**Word Cloud: Top 100 Longest Words**  
+As mentioned above, Word Clouds are really useful tools for visualizing word frequency. As shown in this Word Cloud, the longest word is "superfunkycalifraagisexy".
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+wc <- prince_word_lengths %>%
+  dplyr::ungroup() %>%
+  dplyr::select(word, word_length) %>%
+  dplyr::distinct() %>%
+  dplyr::arrange(desc(word_length))
+
+# generate plot
+wordcloud2::wordcloud2(wc[1:100, ],
+                       size = .2,
+                       minSize = .8,
+                       ellipticity = .3,
+                       fontFamily = "Arial Narrow",
+                       rotateRatio = 1,
+                       fontWeight = "bold",
+                       shape = 'circle')
+```
+![](Figures/wc_len.png)
+</br></br>  
+**Lexical Diversity Over Time**:  
+Lexical diversity provides information about how varied a vocabulary is. When it comes to music, we often expect there to be a large number of unique words. With this in mind, we would also expect there to be high lexical diversity. The plot below is exploring the number of unique words within each song over time and by chart level. What we can see from this plot is that the songs that make the Billboard Charts tend to have less lexical diversity over time than those that do not make the Billboard Charts. The songs with the highest lexical diversity are those that were never officially released.
+
+```{r message=FALSE, warning=FALSE}
+word_summary <- prince_words_filtered %>%
+  dplyr::mutate(decade = ifelse(is.na(decade),"NONE", decade)) %>%
+  dplyr::group_by(decade, song) %>%
+  dplyr::mutate(word_count = n_distinct(word)) %>%
+  dplyr::select(song, Released = decade, Charted = charted, word_count) %>%
+  dplyr::distinct() %>% #To obtain one record per song
+  dplyr::ungroup()
+
+# generate plot
+yarrr::pirateplot(formula =  word_count ~ Released + Charted, #Formula
+                   data = word_summary, #Data frame
+                   xlab = NULL, ylab = "Song Distinct Word Count", #Axis labels
+                   main = "Lexical Diversity Per Decade", #Plot title
+                   pal = "basel", #Color scheme
+                   point.o = .2, #Points
+                   avg.line.o = 1, #Turn on the Average/Mean line
+                   theme = 0, #Theme
+                   point.pch = 16, #Point `pch` type
+                   point.cex = 1.5, #Point size
+                   jitter.val = .1, #Turn on jitter to see the songs better
+                   cex.lab = .9, cex.names = .7) #Axis label size
+```
+
+</br></br>  
+
+**Term Frequency - Inverse Document Frequency (TF-IDF)**:  
+A common way to transform the data to identify and quantify the most important words in a corpus. TF-IDF adjusts the importance of each word for how rarely it is used across the corpus. The assumption behind this transformation is that terms that appear frequently within each of the documents within a corpus should be weighted less. A breakdown and definition of each concept in TF-IDF is as follows:  
+  * **Term Frequency (TF)**: the number of times a word occurs within a document  
+  * **Document Frequency (DF)**: the number of documents that contain each word  
+  * **Inverse Document Frequency (IDF)**: 1/DF  
+  * **TF-IDF**: TF*IDF  
+```{r message=FALSE, warning=FALSE}
+##TF-IDF
+ popular_tfidf_words <- prince_words_filtered %>%
+  # tidytext::unnest_tokens(word, lyrics) %>%
+  dplyr::distinct() %>%
+  dplyr::filter(!word %in% undesirable_words) %>%
+  dplyr::filter(nchar(word) > 3) %>%
+  dplyr::count(chart_level, word, sort = TRUE) %>%
+  dplyr::ungroup() %>%
+  tidytext::bind_tf_idf(word, chart_level, n)
+```
+As shown in the table below, the top 10 most frequently occurring words, like "love" and "time", all have an IDF and TF-IDF of 0 (IDF term will be the natural log of 1 and thus will be zero).
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+popular_tfidf_words[1:10,] %>%
+  dplyr::ungroup(chart_level, n) %>%
+  dplyr::mutate(n = formattable::color_tile("aquamarine","aquamarine")(n)) %>%
+  dplyr::mutate(tf_idf = formattable::color_tile("lightblue","lightblue")(tf_idf)) %>%
+  dplyr::mutate(chart_level = formattable::color_tile("plum","plum")(chart_level)) %>%
+  my_kable_styling(caption = "20 Songs With Highest Word Count")
+```
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>20 Songs With Highest Word Count</caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;"> chart_level </th>
+   <th style="text-align:left;"> word </th>
+   <th style="text-align:left;"> n </th>
+   <th style="text-align:right;"> tf </th>
+   <th style="text-align:right;"> idf </th>
+   <th style="text-align:left;"> tf_idf </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> love </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">386</span> </td>
+   <td style="text-align:right;"> 0.0112899 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> time </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">348</span> </td>
+   <td style="text-align:right;"> 0.0101784 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> girl </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">214</span> </td>
+   <td style="text-align:right;"> 0.0062591 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> night </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">190</span> </td>
+   <td style="text-align:right;"> 0.0055572 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> mind </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">161</span> </td>
+   <td style="text-align:right;"> 0.0047090 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> feel </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">155</span> </td>
+   <td style="text-align:right;"> 0.0045335 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> play </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">153</span> </td>
+   <td style="text-align:right;"> 0.0044750 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> body </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">150</span> </td>
+   <td style="text-align:right;"> 0.0043872 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> hear </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">145</span> </td>
+   <td style="text-align:right;"> 0.0042410 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #dda0dd">Uncharted</span> </td>
+   <td style="text-align:left;"> life </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #7fffd4">144</span> </td>
+   <td style="text-align:right;"> 0.0042118 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #add8e6">0</span> </td>
+  </tr>
+</tbody>
+</table>
+
+</br></br>  
+**TF-IDF: Important Words by Billboard Chart Level**:  
+As shown in the faceted plots below, using TF-IDF changes the top 8 most frequently occurring words by chart level. Looking at the top words for songs that reached the top 10 in the Billboard Charts, I think no one would be surprised to see the top word of "Purple".
+```{r message=FALSE, warning=FALSE}
+top_popular_tfidf_words <- popular_tfidf_words %>%
+  dplyr::arrange(desc(tf_idf)) %>%
+  dplyr::mutate(word = factor(word, levels = rev(unique(word)))) %>%
+  dplyr::group_by(chart_level) %>% 
+  dplyr::slice(seq_len(8)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(chart_level, tf_idf) %>%
+  dplyr::mutate(row = row_number())
+
+top_popular_tfidf_words %>%
+  ggplot2::ggplot(aes(x = row, tf_idf, fill = chart_level)) +
+    ggplot2::geom_col(show.legend = FALSE) +
+    ggplot2::labs(x = NULL, y = "TF-IDF") + 
+    ggplot2::ggtitle("Important Words using TF-IDF by Chart Level") +
+    theme_lyrics() +  
+    ggplot2::facet_wrap(~chart_level, ncol = 3, scales = "free") +
+    ggplot2::scale_x_continuous(  # This handles replacement of row 
+      breaks = top_popular_tfidf_words$row, # notice need to reuse data frame
+      labels = top_popular_tfidf_words$word) +
+    ggplot2::coord_flip()
+```
+
+</br></br>  
+**TF-IDF: Important Words by Decade**:  
+Comparing this plot to the one without using TF-IDF yields very different results. Using this transformation, we can be confident that we are capturing the most important words for each song because we are considering the frequency of each word within and across all songs we are looking at. These plots should have you thinking about what might have influenced Prince to write each of these songs. It is highly likely (as we will show later), that outside events may have had an effect on the appearance of these words.
+```{r message=FALSE, warning=FALSE}
+tfidf_words_decade <- prince_words_filtered %>%
+  # tidytext::unnest_tokens(word, lyrics) %>%
+  dplyr::distinct() %>%
+  dplyr::filter(!word %in% undesirable_words & decade != 'NA') %>%
+  dplyr::filter(nchar(word) > 3) %>%
+  dplyr::count(decade, word, sort = TRUE) %>%
+  dplyr::ungroup() %>%
+  tidytext::bind_tf_idf(word, decade, n) %>%
+  dplyr::arrange(desc(tf_idf))
+
+top_tfidf_words_decade <- tfidf_words_decade %>% 
+  dplyr::group_by(decade) %>% 
+  dplyr::slice(seq_len(8)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(decade, tf_idf) %>%
+  dplyr::mutate(row = row_number())
+
+top_tfidf_words_decade %>%
+  ggplot2::ggplot(aes(x = row, tf_idf, fill = decade)) +
+    ggplot2::geom_col(show.legend = NULL) +
+    ggplot2::labs(x = NULL, y = "TF-IDF") + 
+    ggplot2::ggtitle("Important Words using TF-IDF by Decade") +
+    theme_lyrics() +  
+    ggplot2::facet_wrap(~decade, ncol = 3, nrow = 2, scales = "free") +
+    ggplot2::scale_x_continuous(  # this handles replacement of row 
+      breaks = top_tfidf_words_decade$row, # notice need to reuse data frame
+      labels = top_tfidf_words_decade$word) +
+    ggplot2::coord_flip()
+```
+
+<!-- ```{r message=FALSE, warning=FALSE, eval=FALSE} -->
+<!-- wc2 <- tfidf_words_decade %>% -->
+<!--   dplyr::arrange(desc(tf_idf)) %>% -->
+<!--   dplyr::select(word, tf_idf) -->
+
+<!-- wordcloud2::wordcloud2(wc2[1:300, ], -->
+<!--                        color = "random-dark", -->
+<!--                        size = .2, -->
+<!--                        fontFamily = "Arial Narrow") -->
+<!-- ``` -->
+<!-- ![wordcloud](Figures/wc_3.png) -->
+
+---
+
+<a name="sentan"/>
+
+### Sentiment Analysis
+For this portion of the tutorial, we will be borrowing and expanding on a tutorial from [Data Camp](https://www.datacamp.com/community/tutorials/sentiment-analysis-R). Sentiment analysis is a text mining technique that aims to determine the underlying opinion or subjectivity of a corpus. In tour case, we want to use sentiment analysis to better understand what may have motivated some of Prince's most popular songs. Much like other text mining techniques, there are many different ways that to approach this analysis technique. For this workshop, we will utilize three different lexicons provided by as part of the `tidytext::sentiments` data set. As described in the tutorial, three lexicons include:  
+  * **AFINN**: assigns words with a score that runs between -5 and 5, with negative scores indicating negative sentiment and positive scores indicating positive sentiment  
+  * **Bing**: assigns words into positive and negative categories  
+  * **NRC**: assigns words into one or more of the following ten categories: positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust.
+
+```{r message=FALSE, warning=FALSE}
+new_sentiments <- tidytext::sentiments %>% #From the tidytext package
+  dplyr::filter(lexicon != "loughran") %>% #Remove the finance lexicon
+  dplyr::mutate(sentiment = ifelse(lexicon == "AFINN" & score >= 0, "positive",
+                            ifelse(lexicon == "AFINN" & score < 0,"negative",
+                                   sentiment))) %>%
+  dplyr::group_by(lexicon) %>%
+  dplyr::mutate(words_in_lexicon = n_distinct(word)) %>%
+  dplyr::ungroup()
+```
+
+<!-- </br></br>   -->
+<!-- The relative size of each of the sentiment lexicons described above is shown in the table below. -->
+<!-- ```{r message=FALSE, warning=FALSE, eval=FALSE} -->
+<!-- new_sentiments %>% -->
+<!--   dplyr::group_by(lexicon, sentiment, words_in_lexicon) %>% -->
+<!--   dplyr::summarise(distinct_words = n_distinct(word)) %>% -->
+<!--   dplyr::ungroup() %>% -->
+<!--   tidyr::spread(sentiment, distinct_words) %>% -->
+<!--   dplyr::mutate(words_in_lexicon = color_bar("plum")(words_in_lexicon)) %>% -->
+<!--   my_kable_styling(caption = "Word Counts Per Lexicon") -->
+<!-- ``` -->
+<!-- <table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;"> -->
+<!-- <caption>Word Counts Per Lexicon</caption> -->
+<!--  <thead> -->
+<!--   <tr> -->
+<!--    <th style="text-align:left;"> lexicon </th> -->
+<!--    <th style="text-align:left;"> words_in_lexicon </th> -->
+<!--    <th style="text-align:right;"> anger </th> -->
+<!--    <th style="text-align:right;"> anticipation </th> -->
+<!--    <th style="text-align:right;"> disgust </th> -->
+<!--    <th style="text-align:right;"> fear </th> -->
+<!--    <th style="text-align:right;"> joy </th> -->
+<!--    <th style="text-align:right;"> negative </th> -->
+<!--    <th style="text-align:right;"> positive </th> -->
+<!--    <th style="text-align:right;"> sadness </th> -->
+<!--    <th style="text-align:right;"> surprise </th> -->
+<!--    <th style="text-align:right;"> trust </th> -->
+<!--   </tr> -->
+<!--  </thead> -->
+<!-- <tbody> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> AFINN </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: plum; width: 36.49%">2476</span> </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> 1597 </td> -->
+<!--    <td style="text-align:right;"> 879 </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> bing </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: plum; width: 100.00%">6785</span> </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> 4782 </td> -->
+<!--    <td style="text-align:right;"> 2006 </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--    <td style="text-align:right;"> NA </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> nrc </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: plum; width: 95.33%">6468</span> </td> -->
+<!--    <td style="text-align:right;"> 1247 </td> -->
+<!--    <td style="text-align:right;"> 839 </td> -->
+<!--    <td style="text-align:right;"> 1058 </td> -->
+<!--    <td style="text-align:right;"> 1476 </td> -->
+<!--    <td style="text-align:right;"> 689 </td> -->
+<!--    <td style="text-align:right;"> 3324 </td> -->
+<!--    <td style="text-align:right;"> 2312 </td> -->
+<!--    <td style="text-align:right;"> 1191 </td> -->
+<!--    <td style="text-align:right;"> 534 </td> -->
+<!--    <td style="text-align:right;"> 1231 </td> -->
+<!--   </tr> -->
+<!-- </tbody> -->
+<!-- </table> -->
+
+</br></br>  
+**Matching Lexicons**:
+It is important to determine how well each of the lexicons cover the words within our corpus. As shown in the table below, the NRC lexicon has the greatest number of words that are also included in Prince's song lyrics. This table also provides information on the relative size of each of the sentiment lexicons. It should be noted that we would not expect every word in a corpus to be included in a lexicon, especially if they were not created for song lyrics.
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+prince_words_filtered %>%
+  dplyr::mutate(words_in_lyrics = n_distinct(word)) %>%
+  dplyr::inner_join(new_sentiments) %>%
+  dplyr::group_by(lexicon, words_in_lyrics, words_in_lexicon) %>%
+  dplyr::summarise(lex_match_words = n_distinct(word)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(total_match_words = sum(lex_match_words), #Not used but good to have
+         match_ratio = lex_match_words / words_in_lyrics) %>%
+  dplyr::select(lexicon, lex_match_words,  words_in_lyrics, match_ratio) %>%
+  dplyr::mutate(lex_match_words = formattable::color_bar("pink")(lex_match_words)) %>%
+  my_kable_styling(caption = "Lyrics Found In Lexicons")
+```
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>Lyrics Found In Lexicons</caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;"> lexicon </th>
+   <th style="text-align:left;"> lex_match_words </th>
+   <th style="text-align:right;"> words_in_lyrics </th>
+   <th style="text-align:right;"> match_ratio </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> AFINN </td>
+   <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: plum; width: 46.29%">743</span> </td>
+   <td style="text-align:right;"> 7371 </td>
+   <td style="text-align:right;"> 0.1008004 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> bing </td>
+   <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: plum; width: 71.84%">1153</span> </td>
+   <td style="text-align:right;"> 7371 </td>
+   <td style="text-align:right;"> 0.1564238 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: plum; width: 100.00%">1605</span> </td>
+   <td style="text-align:right;"> 7371 </td>
+   <td style="text-align:right;"> 0.2177452 </td>
+  </tr>
+</tbody>
+</table>
+
+<!-- ```{r message=FALSE, warning=FALSE, eval=FALSE} -->
+<!-- new_sentiments %>% -->
+<!--   dplyr::filter(word %in% c("dark", "controversy", "gangster","discouraged", "race", "love")) %>% -->
+<!--   dplyr::arrange(word) %>% #sort -->
+<!--   dplyr::select(-score) %>% #remove this field -->
+<!--   dplyr::mutate(words_in_lexicon = color_bar("pink")(words_in_lexicon)) %>% -->
+<!--   my_kable_styling(caption = "Specific Words") -->
+<!-- ``` -->
+<!-- <table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;"> -->
+<!-- <caption>Specific Words</caption> -->
+<!--  <thead> -->
+<!--   <tr> -->
+<!--    <th style="text-align:left;"> word </th> -->
+<!--    <th style="text-align:left;"> sentiment </th> -->
+<!--    <th style="text-align:left;"> lexicon </th> -->
+<!--    <th style="text-align:left;"> words_in_lexicon </th> -->
+<!--   </tr> -->
+<!--  </thead> -->
+<!-- <tbody> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> controversy </td> -->
+<!--    <td style="text-align:left;"> negative </td> -->
+<!--    <td style="text-align:left;"> nrc </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 95.33%">6468</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> controversy </td> -->
+<!--    <td style="text-align:left;"> negative </td> -->
+<!--    <td style="text-align:left;"> bing </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 100.00%">6785</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> dark </td> -->
+<!--    <td style="text-align:left;"> sadness </td> -->
+<!--    <td style="text-align:left;"> nrc </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 95.33%">6468</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> dark </td> -->
+<!--    <td style="text-align:left;"> negative </td> -->
+<!--    <td style="text-align:left;"> bing </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 100.00%">6785</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> discouraged </td> -->
+<!--    <td style="text-align:left;"> negative </td> -->
+<!--    <td style="text-align:left;"> AFINN </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 36.49%">2476</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> gangster </td> -->
+<!--    <td style="text-align:left;"> negative </td> -->
+<!--    <td style="text-align:left;"> bing </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 100.00%">6785</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> love </td> -->
+<!--    <td style="text-align:left;"> joy </td> -->
+<!--    <td style="text-align:left;"> nrc </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 95.33%">6468</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> love </td> -->
+<!--    <td style="text-align:left;"> positive </td> -->
+<!--    <td style="text-align:left;"> nrc </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 95.33%">6468</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> love </td> -->
+<!--    <td style="text-align:left;"> positive </td> -->
+<!--    <td style="text-align:left;"> bing </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 100.00%">6785</span> </td> -->
+<!--   </tr> -->
+<!--   <tr> -->
+<!--    <td style="text-align:left;"> love </td> -->
+<!--    <td style="text-align:left;"> positive </td> -->
+<!--    <td style="text-align:left;"> AFINN </td> -->
+<!--    <td style="text-align:left;"> <span style="display: inline-block; direction: rtl; border-radius: 4px; padding-right: 2px; background-color: pink; width: 36.49%">2476</span> </td> -->
+<!--   </tr> -->
+<!-- </tbody> -->
+<!-- </table> -->
+
+
+
+</br></br>  
+**Word Dependency**:  
+As we found out earlier, love is an important concept that is included in many of Prince's songs. The table below shows you the sentiment attached to the different uses of the word love in our lyrics corpus across the sentiment lexicons. It's very interesting to see the coverage of the different forms of love across the different lexicons. Aside form AFINN, there seems to be a relatively even coverage by NRC and bing.
+```{r message=FALSE, warning=FALSE}
+my_word_list <- data %>%
+  tidytext::unnest_tokens(word, lyrics) %>%
+  dplyr::filter(grepl("love", word)) %>%
+  dplyr::count(word) %>%
+  dplyr::select(myword = word, n) %>% #Rename word
+  dplyr::arrange(desc(n))
+```
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+new_sentiments %>%
+  #Right join gets all words in `my_word_list` to show nulls
+  dplyr::right_join(my_word_list, by = c("word" = "myword")) %>%
+  dplyr::filter(word %in% my_word_list$myword) %>%
+  dplyr::mutate(instances = color_tile("pink", "pink")(n)) %>%
+  dplyr::select(-score, -n) %>% #Remove these fields
+  my_kable_styling(caption = "Dependency on Word Form")
+```
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>Dependency on Word Form</caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;"> word </th>
+   <th style="text-align:left;"> sentiment </th>
+   <th style="text-align:left;"> lexicon </th>
+   <th style="text-align:right;"> words_in_lexicon </th>
+   <th style="text-align:left;"> instances </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> love </td>
+   <td style="text-align:left;"> joy </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1937</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> love </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1937</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> love </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> bing </td>
+   <td style="text-align:right;"> 6785 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1937</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> love </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> AFINN </td>
+   <td style="text-align:right;"> 2476 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1937</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lover </td>
+   <td style="text-align:left;"> anticipation </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">167</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lover </td>
+   <td style="text-align:left;"> joy </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">167</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lover </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">167</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lover </td>
+   <td style="text-align:left;"> trust </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">167</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lover </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> bing </td>
+   <td style="text-align:right;"> 6785 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">167</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> loves </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> bing </td>
+   <td style="text-align:right;"> 6785 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">37</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> loved </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> bing </td>
+   <td style="text-align:right;"> 6785 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">31</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> loved </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> AFINN </td>
+   <td style="text-align:right;"> 2476 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">31</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovers </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">17</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovesexy </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">16</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> anticipation </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> joy </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> sadness </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> surprise </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> trust </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> bing </td>
+   <td style="text-align:right;"> 6785 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovely </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> AFINN </td>
+   <td style="text-align:right;"> 2476 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">11</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> clover </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">8</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> glove </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">6</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> hardrocklover </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">6</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> beloved </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> bing </td>
+   <td style="text-align:right;"> 6785 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">4</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> beloved </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> AFINN </td>
+   <td style="text-align:right;"> 2476 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">4</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> loveleft </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">4</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> loveright </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">4</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> love4oneanother </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">3</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> anotherloverholenyohead </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">2</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gloved </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> gloves </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovelovelovelove </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovemaking </td>
+   <td style="text-align:left;"> joy </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovemaking </td>
+   <td style="text-align:left;"> positive </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> lovemaking </td>
+   <td style="text-align:left;"> trust </td>
+   <td style="text-align:left;"> nrc </td>
+   <td style="text-align:right;"> 6468 </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1</span> </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> uestlove </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:left;"> NA </td>
+   <td style="text-align:right;"> NA </td>
+   <td style="text-align:left;"> <span style="display: block; padding: 0 4px; border-radius: 4px; background-color: #ffc0cb">1</span> </td>
+  </tr>
+</tbody>
+</table>
+
+
+</br></br>  
+**The Sentiment Behind the Lyrics**:  
+By creating separate data sets for each lexicon's mapping to the Prince lyrics, we can get a richer sense of what these words might mean. As shown in the NRC plot, most the sentiment is primarily positive when it comes to Prince's lyrics. This is very different than what we see when we look at Bing, which is much more evenly split between positive and negative sentiment.
+
+```{r message=FALSE, warning=FALSE}
+# create separate data sets for each sentiment lexicon
+# bing
+prince_bing <- prince_words_filtered %>%
+  dplyr::inner_join(get_sentiments("bing"))
+
+# nrc
+prince_nrc <- prince_words_filtered %>%
+  dplyr::inner_join(get_sentiments("nrc"))
+
+# nrc sub
+prince_nrc_sub <- prince_words_filtered %>%
+  dplyr::inner_join(get_sentiments("nrc")) %>%
+  dplyr::filter(!sentiment %in% c("positive", "negative"))
+
+# generate plots - nrc
+nrc_plot <- prince_nrc %>%
+  dplyr::group_by(sentiment) %>%
+  dplyr::summarise(word_count = n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(sentiment = reorder(sentiment, word_count)) %>%
+  #Use `fill = -word_count` to make the larger bars darker
+  ggplot2::ggplot(aes(sentiment, word_count, fill = -word_count)) +
+  ggplot2::geom_col() + ggplot2::guides(fill = FALSE) + #Turn off the legend
+  theme_lyrics() + ggplot2::labs(x = NULL, y = "Word Count") +
+  ggplot2::scale_y_continuous(limits = c(0, 15000)) + #Hard code the axis limit
+  ggplot2::ggtitle("Prince NRC Sentiment") +
+  ggplot2::coord_flip()
+
+# generate plots - bing
+bing_plot <- prince_bing %>%
+  dplyr::group_by(sentiment) %>%
+  dplyr::summarise(word_count = n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(sentiment = reorder(sentiment, word_count)) %>%
+  ggplot2::ggplot(aes(sentiment, word_count, fill = sentiment)) +
+  ggplot2::geom_col() +ggplot2::guides(fill = FALSE) +
+  theme_lyrics() + ggplot2::labs(x = NULL, y = "Word Count") +
+  ggplot2::scale_y_continuous(limits = c(0, 8000)) +
+  ggplot2::ggtitle("Prince Bing Sentiment") +
+  ggplot2::coord_flip()
+
+gridExtra::grid.arrange(nrc_plot, bing_plot, nrow = 2)
+```
+
+</br></br>  
+**The Sentiment Behind the Lyrics: Billboard Chart Level**:  
+When we examine the changes in sentiment by Billboard Chart level we can see that it would appear that the charted songs are slightly more positive in sentiment than the uncharted songs. We should keep in mind that as shown above, the Bing lexicon has more negative than positive words.  
+```{r message=FALSE, warning=FALSE}
+prince_polarity_chart <- prince_bing %>%
+  dplyr::filter(chart_level != "NA") %>%
+  dplyr::count(sentiment, chart_level) %>%
+  tidyr::spread(sentiment, n, fill = 0) %>%
+  dplyr::mutate(polarity = positive - negative,
+  percent_positive = positive / (positive + negative) * 100)
+
+#Polarity by chart
+plot1 <- prince_polarity_chart %>%
+  ggplot2::ggplot( aes(chart_level, polarity, fill = chart_level)) +
+  ggplot2::geom_col() +
+  ggplot2::scale_fill_manual(values = my_colors[2:5]) +
+  ggplot2::geom_hline(yintercept = 0, color = "red") +
+  ggplot2::theme(plot.title = element_text(size = 11), legend.position="none") +
+  ggplot2::xlab(NULL) + ggplot2::ylab(NULL) +
+  ggplot2::ggtitle("Polarity By Chart Level")
+
+#Percent positive by chart
+plot2 <- prince_polarity_chart %>%
+  ggplot2::ggplot( aes(chart_level, percent_positive, fill = chart_level)) +
+  ggplot2::geom_col() +
+  ggplot2::scale_fill_manual(values = c(my_colors[2:5])) +
+  ggplot2::geom_hline(yintercept = 0, color = "red") +
+  ggplot2::theme(plot.title = element_text(size = 11), legend.position="none") +
+  ggplot2::xlab(NULL) + ggplot2::ylab(NULL) +
+  ggplot2::ggtitle("Percent Positive By Chart Level")
+
+grid.arrange(plot1, plot2, ncol = 2)
+```
+
+
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- grid.col = c("1970s" = my_colors[1], "1980s" = my_colors[2], "1990s" = my_colors[3], "2000s" = my_colors[4], "2010s" = my_colors[5], "anger" = "grey", "anticipation" = "grey", "disgust" = "grey", "fear" = "grey", "joy" = "grey", "sadness" = "grey", "surprise" = "grey", "trust" = "grey") -->
+
+<!-- # aggregate data by decade -->
+<!-- decade_mood <-  prince_nrc %>% -->
+<!--   dplyr::filter(decade != "NA" & !sentiment %in% c("positive", "negative")) %>% -->
+<!--   dplyr::count(sentiment, decade) %>% -->
+<!--   dplyr::group_by(decade, sentiment) %>% -->
+<!--   dplyr::summarise(sentiment_sum = sum(n)) %>% -->
+<!--   dplyr::ungroup() -->
+
+<!-- # create plot -->
+<!-- circlize::circos.clear() -->
+
+<!-- #Set the gap size -->
+<!-- circlize::circos.par(gap.after = c(rep(5, length(unique(decade_mood[[1]])) - 1), 15, -->
+<!--                          rep(5, length(unique(decade_mood[[2]])) - 1), 15)) -->
+<!-- circlize::chordDiagram(decade_mood, grid.col = grid.col, transparency = .2) -->
+<!-- title("Relationship Between Mood and Decade") -->
+<!-- ``` -->
+
+
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- # download events to use in analysis -->
+<!-- myfile2 <- RCurl::getURL('https://s3.amazonaws.com/assets.datacamp.com/blog_assets/sentiment_analysis/princeEvents.csv', -->
+<!--                         ssl.verifyhost=FALSE, -->
+<!--                         ssl.verifypeer=FALSE) -->
+
+<!-- events <- read.csv(textConnection(myfile2), header=T, stringsAsFactors = FALSE) -->
+<!-- ``` -->
+
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- year_polarity_bing <- prince_bing %>% -->
+<!--   dplyr::group_by(year, sentiment) %>% -->
+<!--   dplyr::count(year, sentiment) %>% -->
+<!--   tidyr::spread(sentiment, n) %>% -->
+<!--   dplyr::mutate(polarity = positive - negative, -->
+<!--          ratio = polarity / (positive + negative)) #use polarity ratio in next graph -->
+
+<!--  events %>% -->
+<!--    #Left join gets event years with no releases -->
+<!--    dplyr::left_join(year_polarity_bing) %>% -->
+<!--    dplyr::filter(event != " ") %>% #Account for bad data -->
+<!--    dplyr:: mutate(event = reorder(event, year), #Sort chart by desc year -->
+<!--            sentiment = ifelse(positive > negative, -->
+<!--                               "positive", "negative")) %>% -->
+<!--    ggplot2::ggplot(aes(event, polarity, fill = sentiment)) + -->
+<!--    ggplot2::geom_bar(stat = "identity") + -->
+<!--    ggplot2::theme(legend.position = "none") + -->
+<!--    ggplot2::xlab(NULL) + -->
+<!--    ggplot2::ggtitle("Sentiment by Events") + -->
+<!--    ggplot2::coord_flip() -->
+<!-- ``` -->
+
+
+</br></br>  
+**The Sentiment Behind the Lyrics: The 90's**:  
+We can also examine the frequently occurring words within each sentiment category of the NRC lexicon in the 90's. It is interesting to see the overlap in sentiment categories by word. For example, "Money" is tied to anger, anticipation, joy, surprise, and trust. In contrast, "words" are tied to negative and anger categories.
+```{r message=FALSE, warning=FALSE}
+plot_words_90s <- prince_nrc %>%
+  dplyr::filter(year %in% c("1990","1991", "1992", "1993", "1994", "1995", "1996", "1997", "1998", "1999")) %>%
+  dplyr::group_by(sentiment) %>%
+  dplyr::count(word, sort = TRUE) %>%
+  dplyr::arrange(desc(n)) %>%
+  dplyr::slice(seq_len(8)) %>% #consider top_n() from dplyr also
+  dplyr::ungroup()
+
+# generate plot
+plot_words_90s %>%
+  #Set `y = 1` to just plot one variable and use word as the label
+  ggplot2::ggplot(aes(word, 1, label = word, fill = sentiment )) +
+  #You want the words, not the points
+  ggplot2::geom_point(color = "transparent") +
+  #Make sure the labels don't overlap
+  ggrepel::geom_label_repel(force = 1,nudge_y = .5,  
+                   direction = "y",
+                   box.padding = 0.04,
+                   segment.color = "transparent",
+                   size = 3) +
+  ggplot2::facet_grid(~sentiment) + theme_lyrics() +
+  ggplot2::theme(axis.text.y = element_blank(), axis.text.x = element_blank(),
+        axis.title.x = element_text(size = 6),
+        panel.grid = element_blank(), panel.background = element_blank(),
+        panel.border = element_rect("lightgray", fill = NA),
+        strip.text.x = element_text(size = 8)) +
+  ggplot2::xlab(NULL) + ylab(NULL) +
+  ggplot2::ggtitle("90's NRC Sentiment") +
+  ggplot2::coord_flip()
+```
+
+</br></br>  
+**The Sentiment Behind Purple Rain**:  
+I find it really interesting to explore the sentiment behind the words of a single song. As shown below, I have investigated the sentiment behind the song "Purple Rain". It's clear from looking at the pattern of color blocks that the song has positive, joy, and trust tied to it. Having heard the song many times, that's not surprising.
+
+```{r message=FALSE, warning=FALSE}
+prince_words_filtered %>%
+  dplyr::filter(song %in% 'purple rain') %>%
+  dplyr::distinct(word) %>%
+  dplyr::inner_join(get_sentiments("nrc")) %>%
+  ggplot2::ggplot(aes(x = word, fill = sentiment)) +
+  ggplot2::facet_grid(~sentiment) +
+  ggplot2::geom_bar() + #Create a bar for each word per sentiment
+  theme_lyrics() +
+  ggplot2::theme(panel.grid.major.x = element_blank(),
+        axis.text.x = element_blank(),
+        strip.text.x= element_text(size = 8)) + #Place the words on the y-axis
+  ggplot2::xlab(NULL) +ggplot2::ylab(NULL) +
+  ggplot2::ggtitle("Purple Rain -  Sentiment Words") +
+  ggplot2::coord_flip()
+```
+
+</br></br>  
+**The Sentiment Behind Different Songs Over Time**:  
+The plot below provides insight into the sentiment behind different songs at different times.
+```{r message=FALSE, warning=FALSE}
+prince_nrc_sub %>%
+  dplyr::filter(song %in% c("so blue", "controversy", "raspberry beret",
+                     "when doves cry", "the future", "1999")) %>%
+  dplyr::count(song, sentiment, year) %>%
+  dplyr::mutate(sentiment = reorder(sentiment, n), song = reorder(song, n)) %>%
+  ggplot2::ggplot(aes(sentiment, n, fill = sentiment)) +
+  ggplot2::geom_col() +
+  ggplot2::facet_wrap(year ~ song, scales = "free_x", labeller = label_both) +
+  theme_lyrics() +
+  ggplot2::theme(panel.grid.major.x = element_blank(),
+        axis.text.x = element_blank()) +
+  ggplot2::labs(x = NULL, y = NULL) +
+  ggplot2::ggtitle("NRC Sentiment Song Analysis") +
+  ggplot2::coord_flip()
+```
+
+</br></br>    
+
+**The Sentiment Behind Bigrams**:  
+Bigrams, or words of length two are also important structure for text mining. I won't go into deal about them today, but as it is very interesting, I have provided a figure using them below. The figure provides an overview of the frequency of bigrams by decade.
+```{r message=FALSE, warning=FALSE}
+prince_bigrams <- data %>%
+  tidytext::unnest_tokens(bigram, lyrics, token = "ngrams", n = 2)
+
+bigrams_separated <- prince_bigrams %>%
+  tidyr::separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered <- bigrams_separated %>%
+  dplyr::filter(!word1 %in% stop_words$word) %>%
+  dplyr::filter(!word2 %in% stop_words$word) %>%
+  dplyr::filter(!word1 %in% undesirable_words) %>%
+  dplyr::filter(!word2 %in% undesirable_words)
+
+#Because there is so much repetition in music, also filter out the cases where the two words are the same
+bigram_decade <- bigrams_filtered %>%
+  dplyr::filter(word1 != word2) %>%
+  dplyr::filter(decade != "NA") %>%
+  tidyr::unite(bigram, word1, word2, sep = " ") %>%
+  dplyr::inner_join(data) %>%
+  dplyr::count(bigram, decade, sort = TRUE) %>%
+  dplyr::group_by(decade) %>%
+  dplyr::slice(seq_len(7)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(decade, n) %>%
+  dplyr::mutate(row = row_number())
+
+## Joining, by = c("song", "year", "album", "peak", "us_pop", "us_rnb", "decade", "chart_level", "charted")
+bigram_decade %>%
+  ggplot2::ggplot(aes(row, n, fill = decade)) +
+  ggplot2::geom_col(show.legend = FALSE) +
+  ggplot2::facet_wrap(~decade, scales = "free_y") +
+  ggplot2::xlab(NULL) + ggplot2::ylab(NULL) +
+  ggplot2::scale_x_continuous(  # This handles replacement of row
+      breaks = bigram_decade$row, # Notice need to reuse data frame
+      labels = bigram_decade$bigram) +
+  theme_lyrics() +
+  ggplot2::theme(panel.grid.major.x = element_blank()) +
+  ggplot2::ggtitle("Bigrams By Decade") +
+  ggplot2::coord_flip()
+```
+
+
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- AFINN <- tidytext::get_sentiments("afinn") -->
+
+<!-- not_words <- bigrams_separated %>% -->
+<!--   dplyr::filter(word1 == "not") %>% -->
+<!--   dplyr::inner_join(AFINN, by = c(word2 = "word")) %>% -->
+<!--   dplyr::count(word2, score, sort = TRUE) %>% -->
+<!--   dplyr::ungroup() -->
+
+<!-- not_words %>% -->
+<!--   dplyr::mutate(contribution = n * score) %>% -->
+<!--   dplyr::arrange(desc(abs(contribution))) %>% -->
+<!--   head(20) %>% -->
+<!--   dplyr::mutate(word2 = reorder(word2, contribution)) %>% -->
+<!--   ggplot2::ggplot(aes(word2, n * score, fill = n * score > 0)) + -->
+<!--   ggplot2::geom_col(show.legend = FALSE) + -->
+<!--   # theme_lyrics() + -->
+<!--   ggplot2::xlab("Words preceded by \"not\"") + -->
+<!--   ggplot2::ylab("Sentiment score * Number of Occurrences") + -->
+<!--   ggplot2::ggtitle("Polar Sentiment of Words Preceded by Not") + -->
+<!--   ggplot2::coord_flip() -->
+<!-- ``` -->
+
+</br></br>  
+
+**Negation Bigram Networks**:  
+Below, I have created a network to illustrate the word pair associations with negation words. This structure provides a very interesting overview of the different combinations of words that create negative bigrams.
+```{r message=FALSE, warning=FALSE}
+AFINN <- tidytext::get_sentiments("afinn")
+
+not_words <- bigrams_separated %>%
+  dplyr::filter(word1 == "not") %>%
+  dplyr::inner_join(AFINN, by = c(word2 = "word")) %>%
+  dplyr::count(word2, score, sort = TRUE) %>%
+  dplyr::ungroup()
+
+negation_words <- c("not", "no", "never", "without")
+
+negation_bigrams <- bigrams_separated %>%
+  dplyr::filter(word1 %in% negation_words) %>%
+  dplyr::inner_join(AFINN, by = c(word2 = "word")) %>%
+  dplyr::count(word1, word2, score, sort = TRUE) %>%
+  dplyr::mutate(contribution = n * score) %>%
+  dplyr::arrange(desc(abs(contribution))) %>%
+  dplyr::group_by(word1) %>%
+  dplyr::slice(seq_len(20)) %>%
+  dplyr::arrange(word1,desc(contribution)) %>%
+  dplyr::ungroup()
+
+bigram_graph <- negation_bigrams %>% igraph::graph_from_data_frame()
+
+set.seed(123)
+
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+ggraph::ggraph(bigram_graph, layout = "fr") +
+  ggraph::geom_edge_link(alpha = .25) +
+  ggraph::geom_edge_density(aes(fill = score)) +
+  ggraph::geom_node_point(color = "purple1", size = 1) + #Purple for Prince!
+  ggraph::geom_node_text(aes(label = name),  repel = TRUE) +
+  ggplot2::theme_void() + ggplot2::theme(legend.position = "none",
+                       plot.title = element_text(hjust = 0.5)) +
+  ggplot2::ggtitle("Negation Bigram Network")
+```
+
+
+
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- pwc <- prince_words_filtered %>% -->
+<!--   dplyr::filter(n() >= 20) %>%  #High counts -->
+<!--   widyr::pairwise_count(word, song, sort = TRUE) %>% -->
+<!--   dplyr::filter(item1 %in% c("love", "peace", "gangster", "hate")) %>% -->
+<!--   dplyr::group_by(item1) %>% -->
+<!--   dplyr::slice(seq_len(7)) %>% -->
+<!--   dplyr::ungroup() %>% -->
+<!--   dplyr::mutate(row = -row_number()) #Descending order -->
+
+<!-- pwc %>% -->
+<!--   ggplot2::ggplot(aes(row, n, fill = item1)) + -->
+<!--   ggplot2::geom_bar(stat = "identity", show.legend = FALSE) + -->
+<!--   ggplot2::facet_wrap(~item1, scales = "free") + -->
+<!--   ggplot2::scale_x_continuous(  #This handles replacement of row -->
+<!--       breaks = pwc$row, #Notice need to reuse data frame -->
+<!--       labels = pwc$item2) + -->
+<!--   theme_lyrics() + ggplot2::theme(panel.grid.major.x = element_blank()) + -->
+<!--   ggplot2::xlab(NULL) + ylab(NULL) + -->
+<!--   ggplot2::ggtitle("Pairwise Counts") + -->
+<!--   ggplot2::coord_flip() -->
+<!-- ``` -->
+
+<!-- ```{r message=FALSE, warning=FALSE} -->
+<!-- prince_words_filtered %>% -->
+<!--   dplyr::group_by(word) %>% -->
+<!--   dplyr::filter(n() >= 20) %>% -->
+<!--   widyr::pairwise_cor(word, song, sort = TRUE) %>% -->
+<!--   dplyr::filter(item1 %in% c("love", "peace", "gangster", "hate")) %>% -->
+<!--   dplyr::group_by(item1) %>% -->
+<!--   dplyr::top_n(7) %>% -->
+<!--   dplyr::ungroup() %>% -->
+<!--   dplyr::mutate(item2 = reorder(item2, correlation)) %>% -->
+<!--   ggplot2::ggplot(aes(item2, correlation, fill = item1)) + -->
+<!--   ggplot2::geom_bar(stat = 'identity', show.legend = FALSE) + -->
+<!--   ggplot2::facet_wrap(~item1, scales = 'free') + -->
+<!--   theme_lyrics() + ggplot2::theme(panel.grid.major.x = element_blank()) + -->
+<!--   ggplot2::xlab(NULL) + ggplot2::ylab(NULL) + -->
+<!--   ggplot2::ggtitle("Pairwise Correlation") + -->
+<!--   ggplot2::coord_flip() -->
+<!-- ``` -->
+
+
+---
+
+<a name="classify"/>
+
+### Classification
+Classification of text is an important task in text mining. There are two types of classification we can use: supervised (e.g. where we have group labels) and unsupervised (e.g. no label or grouping). Here, I will provide very brief examples of topic modeling. To provide you with additional tools, I have included new code that uses the R `quanteda` library. This part of the tutorial comes from [Ken Benoit](http://kenbenoit.net/pdfs/text_analysis_in_R.pdf).
+```{r message=FALSE, warning=FALSE}
+# create a document term matrix and clean data
+corpus <- quanteda::corpus(data$lyrics, docvars=data[,2:10])
+dtm <- quanteda::dfm(corpus, tolower = TRUE, stem = TRUE, remove_punct = TRUE, remove = c(stop_words, tidytext::stop_words, stopwords("english")))
+
+# filtering out words occurring less than 5 times 
+doc_freq <- quanteda::docfreq(dtm)
+dtm <- dtm[, doc_freq >= 5]
+
+# normalize with tf-idf
+dtm <- quanteda::dfm_weight(dtm, "tfidf")
+dtm
+```
+</br></br>  
+
+#### Supervised
+For the supervised example I will train a binary classifier (Charted vs. Uncharted) using Näive Bayes via R `quanteda::textmodel_nb`. As explained in the [`quanteda` documentation](https://tutorials.quanteda.io/machine-learning/nb/), "Naive Bayes is a supervised model usually used to classify documents into two or more categories. We train the classifier using class labels attached to documents, and predict the most likely class(es) of new unlabeled documents". As the contingency table shows, our performance is actually fairly good! We have an accuracy of 84% and a specificity of 88%. That bing said, we have a very low precision (18%) and recall (33%).
+```{r message=FALSE, warning=FALSE}
+## sample data
+train_dtm <- quanteda::dfm_sample(dtm, size = nrow(dtm)*.75)
+test_dtm <- dtm[dplyr::setdiff(quanteda::docnames(dtm), quanteda::docnames(train_dtm)), ]
+
+# train model
+nb_model <- quanteda::textmodel_nb(train_dtm, y = quanteda::docvars(train_dtm, "charted"))
+pred_nb <- stats::predict(nb_model, newdata = test_dtm)
+
+# view predictions
+caret::confusionMatrix(table(prediction = pred_nb$nb.predicted, 
+                             charted = quanteda::docvars(test_dtm, "charted")), 
+                       mode = "everything")
+```
+
+</br></br>  
+
+#### Unsupervised
+For the unsupervised  using latent Dirichlet allocation (LDA), "a generative statistical model that allows sets of observations to be explained by unobserved groups that explain why some parts of the data are similar" [wiki](https://en.wikipedia.org/wiki/Latent_Dirichlet_allocation). The results of this analysis are shown in the table below. The results show the top 10 words for each of the 5 topics we predicted. What's clear from these results is that more pre-processing of the data is likely needed before better results are achieved.
+```{r message=FALSE, warning=FALSE}
+texts = quanteda::corpus_reshape(corpus, to = "paragraphs")
+par_dtm <- quanteda::dfm(texts, stem = TRUE, remove_punct = TRUE, remove = c(stop_words, tidytext::stop_words, quanteda::stopwords("english")))
+par_dtm <- quanteda::dfm_trim(par_dtm, min_count = 5)
+par_dtm <- quanteda::convert(par_dtm, to = "topicmodels")
+
+# set seed and run model
+set.seed(1)
+lda_model <- topicmodels::LDA(par_dtm, method = "Gibbs", k = 5)
+term <- terms(lda_model, 10)
+```
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+term %>%
+  kableExtra::kable("html", escape = FALSE, align = "c", caption = "Top 10 Words by Topic") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "condensed", "bordered"),
+                            full_width = FALSE)
+```
+
+
+<table class="table table-striped table-condensed table-bordered" style="width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>Top 10 Words by Topic</caption>
+ <thead>
+  <tr>
+   <th style="text-align:center;"> Topic 1 </th>
+   <th style="text-align:center;"> Topic 2 </th>
+   <th style="text-align:center;"> Topic 3 </th>
+   <th style="text-align:center;"> Topic 4 </th>
+   <th style="text-align:center;"> Topic 5 </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:center;"> u </td>
+   <td style="text-align:center;"> babi </td>
+   <td style="text-align:center;"> will </td>
+   <td style="text-align:center;"> get </td>
+   <td style="text-align:center;"> come </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> 2 </td>
+   <td style="text-align:center;"> can </td>
+   <td style="text-align:center;"> love </td>
+   <td style="text-align:center;"> got </td>
+   <td style="text-align:center;"> go </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> 4 </td>
+   <td style="text-align:center;"> like </td>
+   <td style="text-align:center;"> one </td>
+   <td style="text-align:center;"> everybodi </td>
+   <td style="text-align:center;"> let </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> la </td>
+   <td style="text-align:center;"> love </td>
+   <td style="text-align:center;"> day </td>
+   <td style="text-align:center;"> parti </td>
+   <td style="text-align:center;"> get </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> oh </td>
+   <td style="text-align:center;"> wanna </td>
+   <td style="text-align:center;"> life </td>
+   <td style="text-align:center;"> like </td>
+   <td style="text-align:center;"> got </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> princ </td>
+   <td style="text-align:center;"> ooh </td>
+   <td style="text-align:center;"> never </td>
+   <td style="text-align:center;"> ai </td>
+   <td style="text-align:center;"> yeah </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> chorus </td>
+   <td style="text-align:center;"> want </td>
+   <td style="text-align:center;"> know </td>
+   <td style="text-align:center;"> rock </td>
+   <td style="text-align:center;"> now </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> girl </td>
+   <td style="text-align:center;"> know </td>
+   <td style="text-align:center;"> just </td>
+   <td style="text-align:center;"> yeah </td>
+   <td style="text-align:center;"> can </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> yeah </td>
+   <td style="text-align:center;"> oh </td>
+   <td style="text-align:center;"> eye </td>
+   <td style="text-align:center;"> da </td>
+   <td style="text-align:center;"> feel </td>
+  </tr>
+  <tr>
+   <td style="text-align:center;"> ha </td>
+   <td style="text-align:center;"> just </td>
+   <td style="text-align:center;"> heart </td>
+   <td style="text-align:center;"> man </td>
+   <td style="text-align:center;"> stop </td>
+  </tr>
+</tbody>
+</table>
+
+---
+
+<a name="biomed"/>
+
+### Biomedical Application
+The reminder of this tutorial is meant to provide you with time to explore biomedical data. We are providing you with data from the [2007 Computational Medicine Center’s 2007 Medical Natural Language Processing Challenge](http://citeseerx.ist.psu.edu/viewdoc/summary?doi=10.1.1.409.9975). In your home directory within the "Data" folder you will find the following items:  
+  * 2007ChallengeDescription.pdf  
+  * 2007ChallengeTrainData.xml  
+  * 2007ChallengeTrainSchema.ng  
+  * README
+
+These documents can provide you with the information needed to understand the goal of the challenge as well as the data. To get you started, I have included a transformed version of the xml data as an R data frame. The data will load to a `data.frame` called "clin_data". If this is not satisfactory, I also included the same data as a csv called "transformed_2007_challenge_data.csv".
+```{r message=FALSE, warning=FALSE}
+# read in data
+load("Data/transformed_2007_challenge_data.rda")
+
+# take a peek at the first row data
+dplyr::glimpse(clin_data[1,])
+
+# number of rows and columns
+dim(data)
+```
+  
+</br></br>  
+**Exploring Clinical Notes**:  
+Below I provide some simple code that begins to explore this data. I encourage you to use what we learned today, in addition to other resources to dive deep into this data and see what you can discover!
+```{r message=FALSE, warning=FALSE}  
+# clinical history
+words_filtered_ch <- clin_data %>%
+  tidytext::unnest_tokens(word, CLINICAL_HISTORY) %>%
+  dplyr::anti_join(tidytext::stop_words) %>%
+  dplyr::distinct() %>%
+  dplyr::filter(!word %in% undesirable_words) %>%
+  dplyr::filter(nchar(word) > 3)
+
+# Top words
+ch <- words_filtered_ch %>%
+  dplyr::count(word, sort = TRUE) %>%
+  dplyr::top_n(10) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(word = reorder(word, n)) %>%
+  ggplot() +
+    ggplot2::geom_col(aes(word, n), fill = my_colors[4]) +
+    ggplot2::theme(legend.position = "none", 
+          plot.title = ggplot2::element_text(hjust = 0.5),
+          panel.grid.major = ggplot2::element_blank()) +
+    ggplot2::xlab("") + 
+    ggplot2::ylab("Report Count") +
+    ggplot2::ggtitle("Most Frequently Used Words in Clinical History Reports") +
+    ggplot2::coord_flip()
+
+# impression
+words_filtered_imp <- clin_data %>%
+  tidytext::unnest_tokens(word, IMPRESSION) %>%
+  dplyr::anti_join(tidytext::stop_words) %>%
+  dplyr::distinct() %>%
+  dplyr::filter(!word %in% undesirable_words) %>%
+  dplyr::filter(nchar(word) > 3)
+
+imp <- words_filtered_imp %>%
+  dplyr::count(word, sort = TRUE) %>%
+  dplyr::top_n(10) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(word = reorder(word, n)) %>%
+  ggplot() +
+    ggplot2::geom_col(aes(word, n), fill = my_colors[4]) +
+    ggplot2::theme(legend.position = "none", 
+          plot.title = ggplot2::element_text(hjust = 0.5),
+          panel.grid.major = ggplot2::element_blank()) +
+    ggplot2::xlab("") + 
+    ggplot2::ylab("Report Count") +
+    ggplot2::ggtitle("Most Frequently Used Words in Clinical History Reports") +
+    ggplot2::coord_flip()
+
+
+gridExtra::grid.arrange(ch, imp, nrow = 2)
+```
+
+
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+words_counts <- words_filtered_ch %>% dplyr::count(word, sort = TRUE) 
+wordcloud2::wordcloud2(words_counts[1:500, ], 
+                       size = .8, 
+                       shape = 'circle', 
+                       fontFamily = "Arial Narrow")
+```
+![](Figures/wc_clin.png)
+```{r message=FALSE, warning=FALSE, eval=FALSE}
+words_counts <- words_filtered_imp %>% dplyr::count(word, sort = TRUE) 
+wordcloud2::wordcloud2(words_counts[1:500, ], 
+                       size = .8, 
+                       shape = 'circle', 
+                       fontFamily = "Arial Narrow")
+```
+![](Figures/wc_imp.png)
+
+---
+
+<a name="resource"/>
+
+### Resources
+For additional tutorials, please see the following:  
+  * [Welcome to Text Mining with R](https://www.tidytextmining.com/)  
+  * [Data Camp - Tutorial 1](https://www.datacamp.com/community/tutorials/R-nlp-machine-learning)  
+  * [Data Camp - Tutorial 2](https://www.datacamp.com/community/tutorials/sentiment-analysis-R)  
+  * [Data Camp - Sentiment Analysis Tutorials](https://www.datacamp.com/courses/sentiment-analysis-in-r-the-tidy-way)
+  * [Quanteda - Näive Bayes Tutorial](https://tutorials.quanteda.io/machine-learning/nb/)
+  
+
+---
+
+<a name="sess"/>
+
+### Session Information
+```{r message=FALSE, warning=FALSE}
+sessionInfo()
+```
+
+
